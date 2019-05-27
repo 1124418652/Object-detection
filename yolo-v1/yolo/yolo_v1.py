@@ -86,7 +86,34 @@ class YOLO_V1_Net(object):
 					net = slim.conv2d(net, 192, 3, scope='conv2')
 					net = slim.max_pool2d(net, 2, padding='SAME', scope='pool2')
 				with tf.variable_scope("group3"):
-					
+					net = slim.conv2d(net, 128, 1, scope='conv3')
+					net = slim.conv2d(net, 256, 3, scope='conv4')
+					net = slim.conv2d(net, 256, 1, scope='conv5')
+					net = slim.conv2d(net, 512, 3, scope='conv6')
+					net = slim.max_pool2d(net, 2, padding='SAME', scope='pool3')
+				with tf.variable_scope("group4"):
+					net = slim.conv2d(net, 256, 1, scope='conv7')
+					net = slim.conv2d(net, 512, 3, scope='conv8')
+					net = slim.conv2d(net, 256, 1, scope='conv9')
+					net = slim.conv2d(net, 512, 3, scope='conv10')
+					net = slim.conv2d(net, 256, 1, scope='conv11')
+					net = slim.conv2d(net, 512, 3, scope='conv12')
+					net = slim.conv2d(net, 256, 1, scope='conv13')
+					net = slim.conv2d(net, 512, 3, scope='conv14')
+					net = slim.conv2d(net, 512, 1, scope='conv15')
+					net = slim.conv2d(net, 1024, 3, scope='conv16')
+					net = slim.max_pool2d(net, 2, padding='SAME', scope='pool4')
+				with tf.variable_scope("group5"):
+					net = slim.conv2d(net, 512, 1, scope='conv17')
+					net = slim.conv2d(net, 1024, 3, scope='conv18')
+					net = slim.conv2d(net, 512, 1, scope='conv19')
+					net = slim.conv2d(net, 1024, 3, scope='conv20')
+					net = slim.conv2d(net, 1024, 3, scope='conv21')
+					net = slim.conv2d(net, 1024, 3, 2, scope='conv22')
+				with tf.variable_scope("append_conv"):
+					net = slim.conv2d(net, 1024, 3, scope='conv23')
+					net = slim.conv2d(net, 1024, 3, scope='conv24')
+					net = tf.transpose(net, [0, 3, 1, 2], name='channel_first')
 
 
 	def loss_calculate(self, logits, labels):
