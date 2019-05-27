@@ -12,7 +12,7 @@ import os
 path and dataset parameters
 """
 DATA_PATH = '../../../datasets/'
-PASCAL_PATH = os.path.join(DATA_PATH, 'VOCtrianval_06-Nov-2007')
+PASCAL_PATH = os.path.join(DATA_PATH, 'VOCtrainval_06-Nov-2007')
 CACHE_PATH = os.path.join(PASCAL_PATH, 'cache')
 OUTPUT_DIR = os.path.join(PASCAL_PATH, 'output')
 WEIGHTS_DIR = os.path.join(PASCAL_PATH, 'weights')
@@ -30,10 +30,10 @@ FLIPPED = True             # flip the image or not
 IMAGE_SIZE = 448
 CELL_SIZE = 7              # the number of grids in output feature map
 BOXES_PER_CELL = 2         # the number of bbox of every grids
-ALPHA = 0.1
+ALPHA = 0.1                # the parameter for leaky relu
 DISP_CONSALE = False
 
-PBJECT_SCALE = 1.
+OBJECT_SCALE = 1.
 NOOBJECT_SCALE = .5        # the scale used in loss function for none obj grids
 CLASS_SCALE = 2.0
 COORD_SCALE = 5.           # the scale used in loss function for obj grids
