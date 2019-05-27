@@ -113,8 +113,16 @@ class YOLO_V1_Net(object):
 				with tf.variable_scope("append_conv"):
 					net = slim.conv2d(net, 1024, 3, scope='conv23')
 					net = slim.conv2d(net, 1024, 3, scope='conv24')
-					net = tf.transpose(net, [0, 3, 1, 2], name='channel_first')
-
+				net = tf.transpose(net, [0, 3, 1, 2], name='channel_first')
+				net = slim.flatten(net, scope='flatten_layer')
+				with tf.variable_scope("fully_connect"):
+					net = slim.fully_connected(net, 512, scope='fc1')
+					net = slim.fully_connected(net, 4096, scope='fc2')
+					net = slim.dropout(net, keep_prob=keep_prob, is_training=is_training,
+									   scope='dropout_layer')
+					# the last layer of network use linear activation function
+					net = slim.fully_connected(net, num_output, activation_fn=None, scope='fc3')
+		return net
 
 	def loss_calculate(self, logits, labels):
 		pass
