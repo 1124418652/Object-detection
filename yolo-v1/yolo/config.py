@@ -35,7 +35,7 @@ DISP_CONSALE = False
 
 OBJECT_SCALE = 1.
 NOOBJECT_SCALE = .5        # the scale used in loss function for none obj grids
-CLASS_SCALE = 2.0
+CLASS_SCALE = 2.0          # this scale is not contained in paper(used for class penalizes)
 COORD_SCALE = 5.           # the scale used in loss function for obj grids
 
 
