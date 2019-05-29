@@ -24,6 +24,8 @@ class YOLO_V1_Net(object):
 		self.output_size = (self.cell_size * self.cell_size)\
 						   * (self.num_classes + 5 * self.boxes_per_cell)
 		self.scale = 1.0 * self.image_size / self.cell_size   # the scale from image size to cell size
+		self.threshold = cfg.THRESHOLD
+		self.iou_threshold = cfg.IOU_THRESHOLD
 
 		# the scale used in loss function
 		self.boundary1 = self.cell_size * self.cell_size * self.num_classes    # [0:boundary1] of output is classes of every boxes
@@ -32,16 +34,16 @@ class YOLO_V1_Net(object):
 		self.noobject_scale = cfg.NOOBJECT_SCALE
 		self.class_scale = cfg.CLASS_SCALE
 		self.coord_scale = cfg.COORD_SCALE
-
-		# the super parameters used for model training 
-		self.learning_rate = cfg.LEARNING_RATE
-		self.batch_size = cfg.BATCH_SIZE
-		self.alpha = cfg.ALPHA
 		# every grid has two bounding box, so the last dimension of offset should be 2
 		self.offset_x = np.transpose(np.reshape(np.array(
 			[np.arange(self.cell_size)] * self.cell_size * self.boxes_per_cell),
 			(self.boxes_per_cell, self.cell_size, self.cell_size)), (1, 2, 0))
 		self.offset_y = np.transpose(self.offset_x, (1, 0, 2))
+
+		# the super parameters used for model training 
+		self.learning_rate = cfg.LEARNING_RATE
+		self.batch_size = cfg.BATCH_SIZE
+		self.alpha = cfg.ALPHA
 
 		self.inputX = tf.placeholder(
 			tf.float32, [None, self.image_size, self.image_size, 3], name='input')
@@ -55,6 +57,7 @@ class YOLO_V1_Net(object):
 			self.loss = self.loss_calculate(self.logits, self._labels)
 			self.total_loss = tf.losses.get_total_loss()
 			tf.summary.scalar('total_loss', self.total_loss)
+
 
 	def build_network(self, inputX, num_output=None, alpha=None, keep_prob=0.5,
 					  is_training=True, scope='yolo-v1'):
@@ -125,6 +128,7 @@ class YOLO_V1_Net(object):
 					net = slim.fully_connected(net, num_output, activation_fn=None, scope='fc3')
 		return net
 
+
 	def iou_calculate(self, boxes1, boxes2, scope='iou_layer'):
 		"""
 		calculate the iou of two boxes
@@ -162,6 +166,7 @@ class YOLO_V1_Net(object):
 			union_square = tf.maximum(areas1 + areas2 - intersection, 1e-10)
 			iou = tf.clip_by_value(intersection / union_square, 0., 1., name='iou')
 			return iou
+
 
 	def loss_calculate(self, logits, labels, scope='loss_layer'):
 		"""
@@ -214,7 +219,7 @@ class YOLO_V1_Net(object):
 
 			# calculate I_obj tensor(the mask to separate obj and no-obj bboxes)
 			# the shape of I_obj and iou are all [batch_size, cell_size, cell_size, boxes_per_cell]
-			object_mask = tf.reduce_max(predict_iou, axis=3, keep_dims=True)
+			object_mask = tf.reduce_max(predict_iou, axis=3, keepdims=True)
 			object_mask = tf.cast(predict_iou >= object_mask, tf.float32) * gt_confidence
 
 			# calculate I_noobj tensor
@@ -222,12 +227,12 @@ class YOLO_V1_Net(object):
 
 			gt_boxes_tran = tf.stack(
 				[gt_boxes[..., 0] * self.cell_size - offset_x,
-				 gt_boxes[..., 1] * self.cell_size - offset_y，
+				 gt_boxes[..., 1] * self.cell_size - offset_y,
 				 tf.sqrt(gt_boxes[..., 2]),
 				 tf.sqrt(gt_boxes[..., 3])], axis=-1)
 
 			# calculate class loss, shape of classes: [batch_size, cell_size, cell_size, 20]
-			class_delta = response * (predict_classes - gt_classes)
+			class_delta = gt_confidence * (predict_classes - gt_classes)
 			class_loss = tf.reduce_mean(
 				tf.reduce_sum(tf.square(class_delta), axis=[1, 2, 3]),
 				name='class_loss') * self.class_scale
@@ -238,6 +243,35 @@ class YOLO_V1_Net(object):
 				tf.reduce_sum(tf.square(object_delta), axis=[1, 2, 3]), 
 				name='object_loss') * self.object_scale
 
+			# calculate noobject loss
+			noobject_delta = noobject_mask * predict_confidences
+			noobject_loss = tf.reduce_mean(
+				tf.reduce_sum(tf.square(noobject_delta), axis=[1, 2, 3]),
+				name='noobject_loss') * self.noobject_scale
+
+			# calculate coordinate loss
+			# shape of coordinate: [batch_size, cell_size, cell_size, boxes_per_cell, 4]
+			coord_mask = tf.expand_dims(object_mask, 4)
+			boxes_delta = coord_mask * (predict_boxes - gt_boxes_tran)
+			coord_loss = tf.reduce_mean(
+				tf.reduce_sum(tf.square(boxes_delta), axis=[1, 2, 3, 4]),
+				name='coord_loss') * self.coord_scale
+
+			tf.losses.add_loss(class_loss)
+			tf.losses.add_loss(object_loss)
+			tf.losses.add_loss(noobject_loss)
+			tf.losses.add_loss(coord_loss)
+
+			tf.summary.scalar('class_loss', class_loss)
+			tf.summary.scalar('object_loss', object_loss)
+			tf.summary.scalar('noobject_loss', noobject_loss)
+			tf.summary.scalar('coord_loss', coord_loss)
+
+			tf.summary.histogram('boxes_delta_x', boxes_delta[..., 0])
+			tf.summary.histogram('boxes_delta_y', boxes_delta[..., 1])
+			tf.summary.histogram('boxes_delta_w', boxes_delta[..., 2])
+			tf.summary.histogram('boxes_delta_h', boxes_delta[..., 3])
+
 
 	def leaky_relu(self, alpha):
 		def op(inputX):
@@ -245,5 +279,101 @@ class YOLO_V1_Net(object):
 		return op
 
 
+	def boxes_filter(self, logits):
+		"""
+		select the right boxes of object from network's output
+		Args:
+			logits: the output of the network
+		"""
 
-yolo = YOLO_V1_Net()
+		predict_classes = tf.reshape(logits[0, self.boundary1], [7, 7, 20])
+		predict_confidence = tf.reshape(logits[:, self.boundary1: self.boundary2], [7, 7, 2])
+		predict_boxes = tf.reshape(logits[0, self.boundary2:], [7, 7, 2, 4])
+		offset_x = tf.constant(self.offset_x, dtype=tf.float32)
+		offset_y = tf.constant(self.offset_y, dtype=tf.float32)
+		predict_boxes_trans = tf.stack(
+			[(predict_boxes[..., 0] + offset_x) / self.cell_size * self.image_size,
+			 (predict_boxes[..., 1] + offset_y) / self.cell_size * self.image_size,
+			 tf.square(predict_boxes[..., 2]) * self.image_size,
+			 tf.square(predict_boxes[..., 3]) * self.image_size], axis=3)
+
+		# calculate the probability of every classes(because the predict probability of classes
+		# that output by network is conditional probability P(class|confidence))
+		scores = tf.expand_dims(predict_confidence, axis=-1)\
+				 * tf.expand_dims(predict_classes, axis=2)
+		scores = tf.reshape(scores, [-1, 20])
+		boxes = tf.reshape(predict_boxes_trans, [-1, 4])
+
+		# 拿到每个box的类别和得分
+		box_classes = tf.argmax(scores, axis=1)
+		box_classes_scores = tf.reduce_max(scores, axis=1)
+
+		# 过滤掉得分小于阈值的box
+		filter_mask = box_classes_scores > self.threshold
+		scores = tf.boolean_mask(scores, filter_mask)
+		boxes = tf.boolean_mask(boxes, mask)
+		box_classes = tf.boolean_mask(box_classes, mask)
+
+		# 调整检测得到的方框的表示方式，(x_center, y_center, w, h) -> (x1, y1, x2, y2)
+		_boxes = tf.stack(
+			[boxes[:, 0] - 0.5 * boxes[:, 2],   # x1 
+			 boxes[:, 1] - 0.5 * boxes[:, 3],   # y1
+			 boxes[:, 0] + 0.5 * boxes[:, 2],   # x2
+			 boxes[:, 1] + 0.5 * boxes[:, 3]],  # y2
+			 axis=1)
+
+		# nms
+		nms_indices = tf.image.non_max_suppression(_boxes, scores, 10, self.iou_threshold)
+
+		scores = tf.gather(scores, nms_indices)
+		boxes = tf.gather(boxes, nms_indices)
+		box_classes = tf.gather(box_classes, nms_indices)
+
+		return scores, boxes, box_classes
+
+	def _draw_rectangle(self, image, result):
+		"""
+		label the object which was detected in source image
+		Args:
+			image: 3-D array, the source image(this image will be modified)
+			result: 2-D array, [[x_center, y_center, w, h, class, score],...]
+		"""
+		
+		for i in range(result):
+			x_center, y_center, w, h = result[i][0: 4]
+			cv2.rectangle(image, (x_center - w / 2, y_center - h / 2),
+				(x_center + w / 2, y_center + h / 2), (0, 255, 0), 1)
+			cv2.rectangle(image, (x_center - w / 2, y_center - h / 2 - 20),
+				(x_center + w / 2, y_center - h / 2), (125, 125, 125), -1)
+			lineType = cv2.LINE_AA if cv2.__version__ > '3' else cv2.CV_AA
+			cv2.putText(
+				image, result[i][4] + ': %.2f'%(result[i][5]),
+				(x - w / 2 + 2, y - h / 2 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 
+				(0, 0, 0), 1, lineType)
+
+
+	def _detect_from_cvmat(self, inputs):
+		"""
+		detect the object in inputs images
+		Args:
+			inputs: 4-D tensor, [1, 448, 448, 3]
+		"""
+
+	def init_detector(self):
+		"""
+		initialize the detector of Yolo network
+		"""
+
+		
+		
+
+	def image_detect(self, image):
+		pass
+
+	def video_detector(self, from_camera = True, file_path = None):
+		pass
+
+
+if __name__ == '__main__':
+	yolo = YOLO_V1_Net()
+	print(yolo.logits)

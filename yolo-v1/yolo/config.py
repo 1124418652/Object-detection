@@ -56,5 +56,5 @@ SAVE_ITER = 1000          # save the weights parameters after SAVE_ITER's iterat
 """
 test parameters
 """
-THRESHOLD = 0.2
+THRESHOLD = 0.2           # P < this threshold is not a classes
 IOU_THRESHOLD = 0.5       # the threshold used for non-maximum supression
