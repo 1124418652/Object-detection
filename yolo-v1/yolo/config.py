@@ -43,10 +43,11 @@ COORD_SCALE = 5.           # the scale used in loss function for obj grids
 solver parameters
 """
 GPU = ''
+# learning_rate = learning_rate * decay_rate^(global_step/decay_step)
 LEARNING_RATE = 1e-4
 DECAY_STEP = 30000
 DECAY_RATE = 0.1
-STAIRCASE = True
+STAIRCASE = True          # if False: global//decay_step
 BATCH_SIZE = 128
 MAX_ITER = 15000
 SUMMARY_ITER = 10         # update the summary file after SUMMARY_ITER's iterations
