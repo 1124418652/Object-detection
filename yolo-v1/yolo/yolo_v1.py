@@ -8,12 +8,14 @@ Created on 2019/5/26
 import os
 import cv2
 import sys
+import time
 import datetime
 import numpy as np 
 import tensorflow as tf 
 import config as cfg
 sys.path.append('../utils')
 from pascal_voc import Pascal_voc
+import timer
 slim = tf.contrib.slim
 
 
@@ -53,16 +55,16 @@ class YOLO_V1_Net(object):
 
         self.inputX = tf.placeholder(
             tf.float32, [None, self.image_size, self.image_size, 3], name='input')
-        self.logits = self.build_network(
+        self.logits, self.net1 = self.build_network(
             self.inputX, num_output=self.output_size, alpha=self.alpha,
             is_training=is_training)
 
-        if is_training:
-            self._labels = tf.placeholder(tf.float32, 
-                [None, self.cell_size, self.cell_size, 5 + self.num_classes])
-            self.loss_calculate(self.logits, self._labels)
-            self.total_loss = tf.losses.get_total_loss()
-            tf.summary.scalar('total_loss', self.total_loss)
+        # if is_training:
+        #     self._labels = tf.placeholder(tf.float32, 
+        #         [None, self.cell_size, self.cell_size, 5 + self.num_classes])
+        #     self.loss_calculate(self.logits, self._labels)
+        #     self.total_loss = tf.losses.get_total_loss()
+        #     tf.summary.scalar('total_loss', self.total_loss)
 
 
     def build_network(self, inputX=None, num_output=None, alpha=None, keep_prob=1,
@@ -86,117 +88,15 @@ class YOLO_V1_Net(object):
             num_output = self.output_size
         if None == alpha:
             alpha = 0.1
-
-        # with tf.variable_scope(scope):
-        #     with slim.arg_scope(
-        #         [slim.conv2d, slim.fully_connected],
-        #         activation_fn=self.leaky_relu(alpha),
-        #         weights_regularizer=slim.l2_regularizer(0.0005),
-        #         weights_initializer=tf.truncated_normal_initializer(0.0, 0.01)):
-        #         """
-        #         with tf.variable_scope("group1"):
-        #             net = tf.pad(inputX, np.array([[0, 0], [3, 3], [3, 3], [0, 0]]),
-        #                      name='pad_1')
-        #             net = slim.conv2d(net, 64, 7, 2, padding='VALID', scope='conv1')
-        #             net = slim.max_pool2d(net, 2, padding='SAME', scope='pool1')
-        #         with tf.variable_scope("group2"):
-        #             net = slim.conv2d(net, 192, 3, scope='conv2')
-        #             net = slim.max_pool2d(net, 2, padding='SAME', scope='pool2')
-        #         with tf.variable_scope("group3"):
-        #             net = slim.conv2d(net, 128, 1, scope='conv3')
-        #             net = slim.conv2d(net, 256, 3, scope='conv4')
-        #             net = slim.conv2d(net, 256, 1, scope='conv5')
-        #             net = slim.conv2d(net, 512, 3, scope='conv6')
-        #             net = slim.max_pool2d(net, 2, padding='SAME', scope='pool3')
-        #         with tf.variable_scope("group4"):
-        #             net = slim.conv2d(net, 256, 1, scope='conv7')
-        #             net = slim.conv2d(net, 512, 3, scope='conv8')
-        #             net = slim.conv2d(net, 256, 1, scope='conv9')
-        #             net = slim.conv2d(net, 512, 3, scope='conv10')
-        #             net = slim.conv2d(net, 256, 1, scope='conv11')
-        #             net = slim.conv2d(net, 512, 3, scope='conv12')
-        #             net = slim.conv2d(net, 256, 1, scope='conv13')
-        #             net = slim.conv2d(net, 512, 3, scope='conv14')
-        #             net = slim.conv2d(net, 512, 1, scope='conv15')
-        #             net = slim.conv2d(net, 1024, 3, scope='conv16')
-        #             net = slim.max_pool2d(net, 2, padding='SAME', scope='pool4')
-        #         with tf.variable_scope("group5"):
-        #             net = slim.conv2d(net, 512, 1, scope='conv17')
-        #             net = slim.conv2d(net, 1024, 3, scope='conv18')
-        #             net = slim.conv2d(net, 512, 1, scope='conv19')
-        #             net = slim.conv2d(net, 1024, 3, scope='conv20')
-        #             net = slim.conv2d(net, 1024, 3, scope='conv21')
-        #             net = slim.conv2d(net, 1024, 3, 2, scope='conv22')
-        #         with tf.variable_scope("append_conv"):
-        #             net = slim.conv2d(net, 1024, 3, scope='conv23')
-        #             net = slim.conv2d(net, 1024, 3, scope='conv24')
-        #         net = tf.transpose(net, [0, 3, 1, 2], name='channel_first')
-        #         net = slim.flatten(net, scope='flatten_layer')
-        #         with tf.variable_scope("fully_connect"):
-        #             net = slim.fully_connected(net, 512, scope='fc1')
-        #             net = slim.fully_connected(net, 4096, scope='fc2')
-        #             net = slim.dropout(net, keep_prob=keep_prob, is_training=is_training,
-        #                                scope='dropout_layer')
-        #             # the last layer of network use linear activation function
-        #             net = slim.fully_connected(net, num_output, activation_fn=None, scope='fc3')
-        # return net
-        # """
-        #         net = tf.pad(
-        #             inputX, np.array([[0, 0], [3, 3], [3, 3], [0, 0]]),
-        #             name='pad_1')
-        #         net = slim.conv2d(inputX, 64, 7, 2, padding='VALID', scope='conv_2')
-
-        #         net = slim.max_pool2d(net, 2, padding='SAME', scope='pool_3')
-                
-        #         net = slim.conv2d(net, 192, 3, scope='conv_4')
-        #         net = slim.max_pool2d(net, 2, padding='SAME', scope='pool_5')
-        #         net = slim.conv2d(net, 128, 1, scope='conv_6')
-        #         net = slim.conv2d(net, 256, 3, scope='conv_7')
-        #         net = slim.conv2d(net, 256, 1, scope='conv_8')
-        #         net = slim.conv2d(net, 512, 3, scope='conv_9')
-        #         net = slim.max_pool2d(net, 2, padding='SAME', scope='pool_10')
-        #         net = slim.conv2d(net, 256, 1, scope='conv_11')
-        #         net = slim.conv2d(net, 512, 3, scope='conv_12')
-        #         net = slim.conv2d(net, 256, 1, scope='conv_13')
-        #         net = slim.conv2d(net, 512, 3, scope='conv_14')
-        #         net = slim.conv2d(net, 256, 1, scope='conv_15')
-        #         net = slim.conv2d(net, 512, 3, scope='conv_16')
-        #         net = slim.conv2d(net, 256, 1, scope='conv_17')
-        #         net = slim.conv2d(net, 512, 3, scope='conv_18')
-        #         net = slim.conv2d(net, 512, 1, scope='conv_19')
-        #         net = slim.conv2d(net, 1024, 3, scope='conv_20')
-        #         net = slim.max_pool2d(net, 2, padding='SAME', scope='pool_21')
-        #         net = slim.conv2d(net, 512, 1, scope='conv_22')
-        #         net = slim.conv2d(net, 1024, 3, scope='conv_23')
-        #         net = slim.conv2d(net, 512, 1, scope='conv_24')
-        #         net = slim.conv2d(net, 1024, 3, scope='conv_25')
-        #         net = slim.conv2d(net, 1024, 3, scope='conv_26')
-        #         # net = tf.pad(
-        #         #     net, np.array([[0, 0], [1, 1], [1, 1], [0, 0]]),
-        #         #     name='pad_27')
-        #         net = slim.conv2d(net, 1024, 3, 2, scope='conv_28')
-        #         net = slim.conv2d(net, 1024, 3, scope='conv_29')
-        #         net = slim.conv2d(net, 1024, 3, scope='conv_30')
-        #         net = tf.transpose(net, [0, 3, 1, 2], name='trans_31')
-        #         net = slim.flatten(net, scope='flat_32')
-        #         net = slim.fully_connected(net, 512, scope='fc_33')
-        #         net = slim.fully_connected(net, 4096, scope='fc_34')
-        #         net = slim.dropout(
-        #             net, keep_prob=keep_prob, is_training=is_training,
-        #             scope='dropout_35')
-        #         net = slim.fully_connected(
-        #             net, num_output, activation_fn=None, scope='fc_36')
-        # return net
-
         
         with tf.variable_scope('yolo'):
             with tf.variable_scope('conv_2'):
                 net = self._conv_layer(inputX,  64, 7, 2,'conv_2')
 
-            net = self._maxpool_layer(net,  2, 2)
+            net1 = self._maxpool_layer(net,  2, 2)
 
             with tf.variable_scope('conv_4'):
-                net = self._conv_layer(net,  192, 3, 1,'conv_4')
+                net = self._conv_layer(net1,  192, 3, 1,'conv_4')
             net = self._maxpool_layer(net, 2, 2)
             with tf.variable_scope('conv_6'):
                 net = self._conv_layer(net, 128, 1, 1,'conv_6')
@@ -208,9 +108,9 @@ class YOLO_V1_Net(object):
                 net = self._conv_layer(net, 512, 3, 1,'conv_9')
             net = self._maxpool_layer(net, 2, 2)
             with tf.variable_scope('conv_11'):
-                net = self._conv_layer(net, 256, 1, 1,'conv_11')
+                net3 = self._conv_layer(net, 256, 1, 1,'conv_11')
             with tf.variable_scope('conv_12'):
-                net = self._conv_layer(net, 512, 3, 1,'conv_12')
+                net = self._conv_layer(net3, 512, 3, 1,'conv_12')
             with tf.variable_scope('conv_13'):
                 net = self._conv_layer(net, 256, 1, 1,'conv_13')
             with tf.variable_scope('conv_14'):
@@ -251,7 +151,7 @@ class YOLO_V1_Net(object):
                 net = self._fc_layer(net, 4096, activation=self.leak_relu,scope='fc_34')
             with tf.variable_scope('fc_36'):
                 net = self._fc_layer(net, 7*7*30,scope='fc_36')
-        return net
+        return net, net3
 
     def _conv_layer(self, x, num_filters, filter_size, stride,scope):
 
@@ -438,10 +338,12 @@ class YOLO_V1_Net(object):
             tf.summary.scalar('noobject_loss', noobject_loss)
             tf.summary.scalar('coord_loss', coord_loss)
 
-            tf.summary.histogram('boxes_delta_x', boxes_delta[..., 0])
-            tf.summary.histogram('boxes_delta_y', boxes_delta[..., 1])
-            tf.summary.histogram('boxes_delta_w', boxes_delta[..., 2])
-            tf.summary.histogram('boxes_delta_h', boxes_delta[..., 3])
+            # tf.summary.histogram('boxes_delta_x', boxes_delta[..., 0])
+            # tf.summary.histogram('boxes_delta_y', boxes_delta[..., 1])
+            # tf.summary.histogram('boxes_delta_w', boxes_delta[..., 2])
+            # tf.summary.histogram('boxes_delta_h', boxes_delta[..., 3])
+
+            return logits, class_delta
 
 
     def leaky_relu(self, alpha):
@@ -566,6 +468,7 @@ class YOLO_V1_Net(object):
         scores, boxes, box_classes = self.sess.run(
             [_scores, _boxes, _box_classes], 
             feed_dict = {self.inputX: tmp_image})
+        print(scores)
 
         boxes = np.stack([
             boxes[..., 0] * w_scale,
@@ -646,6 +549,17 @@ class YOLO_V1_Net(object):
             weight_file = '../weights/YOLO_small.ckpt'
         if not append_name:
             append_name = 'None'
+
+        # loss计算的参数的初始化
+        self._labels = tf.placeholder(tf.float32, 
+                [None, self.cell_size, self.cell_size, 5 + self.num_classes])
+
+
+        self.loss_logits, self.loss_class_delta = self.loss_calculate(self.logits, self._labels)
+        
+
+        self.total_loss = tf.losses.get_total_loss()
+        tf.summary.scalar('total_loss', self.total_loss)
         
         self.summary_iter = cfg.SUMMARY_ITER
         self.save_iter = cfg.SAVE_ITER
@@ -656,7 +570,7 @@ class YOLO_V1_Net(object):
 
         # 模型保存的参数
         self.variable_to_restore = tf.global_variables()
-        self.saver = tf.train.Saver(self.variable_to_restore, max_to_keep=None)
+        self.saver = tf.train.Saver(max_to_keep = 5)
         self.ckpt_file = os.path.join(self.output_dir, 'yolo')
         self.summary_op = tf.summary.merge_all()
         self.writer = tf.summary.FileWriter(self.output_dir, flush_secs=60)
@@ -692,40 +606,62 @@ class YOLO_V1_Net(object):
         if self.sess:
             self.sess.close()
         self.sess = tf.Session(config=config)
-
+        self.sess.run(tf.global_variables_initializer())
         # 从文件中提取预训练的参数值
-        if weight_file is not None:
-            print('Restoring weights from: ' + weight_file)
-            self.saver.restore(self.sess, weight_file)
-            print('Finish restoring weights.')
+        print('Restoring weights from: ' + weight_file)
+        self.saver.restore(self.sess, weight_file)
+        print('Finish restoring weights.')
 
         self.writer.add_graph(self.sess.graph)
 
 
     def train(self):
-        train_timer = Timer()
-        data_load_timer = Timer()
+        # train_timer = timer.Timer()
+        # data_load_timer = timer.Timer()
 
         for step in range(1, self.max_iter + 1):
-            data_load_timer.tic()
+
+            # data_load_timer.tic()
+            begin = time.time()
             images, labels = self.data.get_data()
-            load_timer.toc()
+            # print(images.shape)
+            # w1 = self.sess.graph.get_operation_by_name('yolo/conv_2/weights')
+            # print(w1.run(session=self.sess))
+            # load_timer.toc()
             feed_dict = {self.inputX: images,
                          self._labels: labels}
-
+            loss, _ = self.sess.run([self.total_loss, self.train_op], feed_dict=feed_dict)
+            # print(self.loss_logits.eval(session=self.sess, feed_dict=feed_dict))
+            # print(self.net1.eval(session=self.sess, feed_dict=feed_dict))
+            min_loss = 100
             if step % self.summary_iter == 0:
                 if step % (self.summary_iter * 10) == 0:
-                    train_timer.tic()
-                    summary_str, loss, _ = self.sess.run(
-                        [self.summary_op, self.total_loss, self.train_op],
+                    # train_timer.tic()
+                    summary_str = self.sess.run(self.summary_op,
                         feed_dict=feed_dict)
-                    train_timer.toc()
+                    # train_timer.toc()
 
-                log_str = """{} Epoch: {}, Step: {}, Learning rate: {}, 
-                Loss: {:5.3f}\n Speed: {:.3f} s/iter""".format(
+                    log_str = """{} Epoch: {}, Step: {}, Learning rate: {}, \nLoss: {:5.3f}\nSpeed: {:.3f} s/100step""".format(
+                        datetime.datetime.now().strftime('%m-%d %H:%M:%S'),
+                        self.data.epoch, step, round(self.learning_rate.eval(session=self.sess),6),
+                        loss, (time.time()-begin)/1000)
+
+                    print(log_str)
+
+                else:
+                    summary_str, _ = self.sess.run(
+                            [self.summary_op, self.train_op],
+                            feed_dict=feed_dict)
+                self.writer.add_summary(summary_str, step)
+
+            if step > self.save_iter and loss < min_loss:
+                min_loss = loss
+                print("{} Saving checkpoint file to: {}".format(
                     datetime.datetime.now().strftime('%m-%d %H:%M:%S'),
-                    self.data.epoch, step, round(self.learning_rate.eval(session=self.sess),6),
-                    loss, 0)
+                    self.output_dir))
+                self.saver.save(
+                    self.sess, self.ckpt_file, global_step=self.global_step)
+            
 
 
 
@@ -733,7 +669,18 @@ if __name__ == '__main__':
     yolo = YOLO_V1_Net()
     # print(yolo.logits)
     # yolo.init_detector()
-    image = cv2.imread("../test-images/4.jpg")
+    # dataset = Pascal_voc('train')
+    # yolo.init_solver(dataset)
+    # image = cv2.imread("../test-images/4.jpg")
+    # dataset = Pascal_voc('train')
+    # image, labels = dataset.get_data()
+    # image = ((image[0] + 1) * 255/2).astype(np.uint8)
+    # print(image)
+    # cv2.imshow("image", image)
+    # image = yolo.image_detect(image)
+    # cv2.imshow("si", image)
+    # cv2.waitKey(0)
     # yolo.video_detector(False, '../test-images/轨道有异物2.mp4')
     dataset = Pascal_voc('train')
-    yolo.init_solver(dataset)
+    yolo.init_solver(dataset, append_name='pascal_voc_trained_weight')
+    yolo.train()

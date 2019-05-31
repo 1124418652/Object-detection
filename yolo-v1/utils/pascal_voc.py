@@ -52,7 +52,7 @@ class Pascal_voc(object):
 		img = cv2.imread(image_path, 1)
 		img = cv2.resize(img, (self.image_size, self.image_size))
 		img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-		img = np.multiply(1/255., img)
+		img = np.multiply(2/255., img) - 1.
 		if flipped:
 			img = img[:, ::-1, :]
 		return img
@@ -180,4 +180,5 @@ class Pascal_voc(object):
 
 if __name__ == '__main__':
 	dataset = Pascal_voc('train')
-	dataset.get_data()
+	images, labels = dataset.get_data()
+	print(images[0])
