@@ -586,7 +586,7 @@ class YOLO_V1_Net(object):
         tf.train.exponential_decay(
             learning_rate,               初始学习率
             global_step,                 当前迭代次数
-            decay_steps,        衰减速度（在迭代到该次数时学习率衰减为earning_rate * decay_rate）
+            decay_steps,        衰减速度（在迭代到该次数时学习率衰减为learning_rate * decay_rate^(global_step/decay_steps)）
             decay_rate,         学习率衰减系数，通常介于0-1之间。
             staircase=False,    (默认值为False,当为True时，（global_step/decay_steps）则被转化为整数) ,选择不同的衰减方式。
             name=None)
@@ -668,19 +668,19 @@ class YOLO_V1_Net(object):
 if __name__ == '__main__':
     yolo = YOLO_V1_Net()
     # print(yolo.logits)
-    # yolo.init_detector()
-    # dataset = Pascal_voc('train')
+    yolo.init_detector()
+    dataset = Pascal_voc('train')
     # yolo.init_solver(dataset)
-    # image = cv2.imread("../test-images/4.jpg")
+    image = cv2.imread("../test-images/4.jpg")
     # dataset = Pascal_voc('train')
     # image, labels = dataset.get_data()
     # image = ((image[0] + 1) * 255/2).astype(np.uint8)
     # print(image)
     # cv2.imshow("image", image)
-    # image = yolo.image_detect(image)
-    # cv2.imshow("si", image)
-    # cv2.waitKey(0)
+    image = yolo.image_detect(image)
+    cv2.imshow("si", image)
+    cv2.waitKey(0)
     # yolo.video_detector(False, '../test-images/轨道有异物2.mp4')
-    dataset = Pascal_voc('train')
-    yolo.init_solver(dataset, append_name='pascal_voc_trained_weight')
-    yolo.train()
+    # dataset = Pascal_voc('train')
+    # yolo.init_solver(dataset, append_name='pascal_voc_trained_weight')
+    # yolo.train()
