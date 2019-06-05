@@ -7,21 +7,32 @@ import tensorflow as tf
 
 class SSD(object):
 
-	def __init__(self):
-		
+	def __init__(self, threshold=0.6):
+		"""
+		构造函数
+		Args:
+			threshold: 判断是否保留先验框的阈值
+		"""
+
 		self.num_boxes = []
 		self.feature_map_size = cfg.FEATURE_MAP_SIZE
 		self.classes = cfg.CLASSES
 		self.img_size = (cfg.IMAGE_SIZE, cfg.IMAGE_SIZE)
-		self.num_classes = cfg.NUM_CLASSES
+		self.num_classes = cfg.NUM_CLASSES  # 21
 
+		# 6个特征图对应的参数
 		self.feature_layers = cfg.FEATURE_LAYERS
-		self.boxes_num = cfg.BOXES_NUM
+		self.boxes_num = cfg.BOXES_NUM    # 每个像素点对应的先验框数目
 		self.is_L2norm = cfg.IS_L2NORM
+		self.n_boxes = cfg.N_BOXES        # 每个特征图的先验框数目
 
 		# anchor 生成参数
 		self.anchor_sizes = cfg.ANCHOR_SIZES
 		self.anchor_ratios = cfg.ANCHOR_RATIOS
+
+		# 网络输出的偏移量的缩放系数
+		self.prior_scaling = cfg.PRIOR_SCALING
+		self.threshold = threshold
 
 
 	def l2norm(self, X, trainable=True, scope='L2Normalization'):
@@ -161,7 +172,7 @@ class SSD(object):
 					is_L2norm=self.is_L2norm[index], 
 					scope=layer + '_box')
 				locations.append(location_pred)
-				predictions.append(class_pred)
+				predictions.append(tf.nn.softmax(class_pred))
 			return X, locations, predictions
 
 
@@ -169,13 +180,110 @@ class SSD(object):
 	def ssd_anchor_layer(img_size, feature_map_size, anchor_size,
 		anchor_ratio, anchor_step, box_num, offset=0.5):
 		"""
-		在一层 feature map 中生成锚框
+		在单层 feature map 中生成锚框
 		Args:
 			img_size: 1-D list with 2 elements, (rows, cols)
 			feature_map_size: 1-D list or tupple with 2 elements, (rows, cols)
+			anchor_size: 锚框的尺寸信息
+			anchor_ratio: 锚框缩放比例
+			anchor_step: 该特征图与原图的比例
+			box_num: 该特征图中每个像素点对应的锚框数目
+			offset: 锚框中心相对于网格左上角点的偏移量
 		"""
+		y, x = np.mgrid[0:feature_map_size[0], 0:feature_map_size[1]]      # 生成网格左上角点
+		y = (y.astype(np.float32) + offset) * anchor_step / img_size[0]    # 得到锚框在原图上的中点坐标
+		x = (x.astype(np.float32) + offset) * anchor_step / img_size[1]
+
+		# expand dims to support easy broadcasting in function ssd_decode()
+		x = np.expand_dims(x, axis=-1)
+		y = np.expand_dims(y, axis=-1)
+
+		# calculate the width and height of every anchors
+		h = np.zeros((box_num, ), dtype=np.float32)
+		w = np.zeros((box_num, ), dtype=np.float32)
+
+		h[0] = anchor_size[0] / img_size[0]
+		w[0] = anchor_size[0] / img_size[1]
+		h[1] = (anchor_size[0] * anchor_size[1]) ** 0.5 / img_size[0]
+		w[1] = (anchor_size[0] * anchor_size[1]) ** 0.5 / img_size[1]
+
+		for i, ratio in enumerate(anchor_ratio):
+			h[i + 2] = anchor_size[0] / img_size[0] / (ratio ** 0.5)    # 从第三位开始添加
+			w[i + 2] = anchor_size[0] / img_size[1] * (ratio ** 0.5)
+
+		return x, y, w, h
+
+
+	@staticmethod
+	def ssd_decode(location, box, prior_scaling):
+		"""
+		对单层特征图的网络输出解码
+		Args:
+			location: 网络输出的预测坐标值, [batch_size, height, width, anchor_box, coordinations]
+			box: 默认的锚框坐标及长宽，(x, y, w, h)
+			prior_scaling: 先验框的缩放比例
+		"""
+
+		anchor_x, anchor_y, anchor_w, anchor_h = box 
+		center_x = location[:, :, :, :, 0] * prior_scaling[0] * anchor_w + anchor_x 
+		center_y = location[:, :, :, :, 1] * prior_scaling[1] * anchor_h + anchor_y
+		w = anchor_w * tf.exp(location[:, :, :, :, 2] * prior_scaling[2])
+		h = anchor_h * tf.exp(location[:, :, :, :, 3] * prior_scaling[3])
+		bboxes = tf.stack([center_x - w / 2.0, center_y - h / 2.0, 
+						   center_x + w / 2.0, center_y + h / 2.0],
+						   axis=-1)
+		return bboxes
+
+
+	def choose_anchor_boxes(self, prediction, bboxes, threshold=None):
+		"""
+		对单层特征图的检验框进行阈值筛选，筛选出检验框所属类别的概率值>阈值的检验框
+		Args:
+			prediction: 5-D tensor, 网络输出的每个类别的预测概率,
+						 [batch_size, height, width, boxes, classes]
+			bboxes: 5-D tensor, 通过 ssd_decode() 解码得到的检验框
+			threshold: 检验框所属类别概率的阈值
+		"""
+
+		if not threshold:
+			threshold = self.threshold
+		bboxes = tf.reshape(bboxes, [-1, 4])
+		prediction = tf.reshape(prediction, [-1, self.num_classes])
+		prediction = prediction[:, 1:]    # 提取除背景类外的所有类别
+		max_classes = tf.argmax(prediction, axis=-1) + 1  # 提取索引,加1是因为从1开始
+		scores = tf.reduce_max(prediction, axis=-1)       # 提取值
+
+		filter_mask = scores > threshold
+		max_classes = tf.boolean_mask(max_classes, filter_mask)
+		scores = tf.boolean_mask(scores, filter_mask)
+		bboxes = tf.boolean_mask(bboxes, filter_mask)
+
+		return max_classes, scores, bboxes
+
+
+	def nms(self, classes, scores, bboxes, nms_threshold=0.5):
+		"""
+		对每一层特征图中筛选出的检验框进行非极大值抑制
+		Args:
+			classes: 1-D tensor, 检验框对应的类别, shape: [bboxes_num]
+			scores: 1-D tensor, 检验框预测类别的概率, shape: [bboxes_num]
+			bboxes: 2-D tensor, 检验框的坐标, shape: [bboxes_num, 4]
+			nms_threshold: 判断两个检验框重合的iou阈值
+		"""
+		assert scores.shape[0] == bboxes.shape[0] == bboxes.shape[0] 
+		keep_boxes = []
+		indexes = np.argsort(-scores)     # 按置信度倒序排序，得到排序后的索引值
+		classes = classes[indexes]
+		scores = scores[indexes]
+		bboxes = bboxes[indexes]
+
+
 
 if __name__ == '__main__':
 	ssd = SSD()
 	X, locations, predictions = ssd.build_net()
-	print(locations)
+	box = SSD.ssd_anchor_layer(ssd.img_size, (38, 38), (21, 45), [2, 0.5], 8, 4)
+	boxes = ssd.ssd_decode(locations[0], box, ssd.prior_scaling)
+	max_classes, scores, bboxes = ssd.choose_anchor_boxes(predictions[0], boxes)
+	# ssd.nms(max_classes, scores, bboxes)
+	print(boxes)

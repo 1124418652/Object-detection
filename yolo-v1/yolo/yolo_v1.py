@@ -285,7 +285,7 @@ class YOLO_V1_Net(object):
                  tf.square(predict_boxes[..., 2]),
                  tf.square(predict_boxes[..., 3])], axis=-1)
 
-            # calculate iou
+            # calculate iou（这里的iou就是confidence，即bounding box中包含目标的概率）
             predict_iou = self.iou_calculate(predict_boxes_trans, gt_boxes)
 
             # calculate I_obj tensor(the mask to separate obj and no-obj bboxes)
@@ -677,10 +677,10 @@ if __name__ == '__main__':
     # image = ((image[0] + 1) * 255/2).astype(np.uint8)
     # print(image)
     # cv2.imshow("image", image)
-    image = yolo.image_detect(image)
-    cv2.imshow("si", image)
-    cv2.waitKey(0)
-    # yolo.video_detector(False, '../test-images/轨道有异物2.mp4')
+    # image = yolo.image_detect(image)
+    # cv2.imshow("si", image)
+    # cv2.waitKey(0)
+    yolo.video_detector(True, '../test-images/轨道有异物2.mp4')
     # dataset = Pascal_voc('train')
     # yolo.init_solver(dataset, append_name='pascal_voc_trained_weight')
     # yolo.train()
