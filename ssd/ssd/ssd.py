@@ -219,9 +219,12 @@ class SSD(object):
 		"""
 		对单层特征图的网络输出解码
 		Args:
-			location: 网络输出的预测坐标值, [batch_size, height, width, anchor_box, coordinations]
+			location: 5-D tensor, 网络输出的预测坐标值, [batch_size, height, width, anchor_box, coordinations]
 			box: 默认的锚框坐标及长宽，(x, y, w, h)
 			prior_scaling: 先验框的缩放比例
+		Returns:
+			bboxes: 5-D tensor, 解码后的预测框， [batch_size, height, width, box, coordination]
+					其中coordination表示的是预测框的左上角坐标和右下角坐标
 		"""
 
 		anchor_x, anchor_y, anchor_w, anchor_h = box 
@@ -261,7 +264,7 @@ class SSD(object):
 		return max_classes, scores, bboxes
 
 
-	def nms(self, classes, scores, bboxes, nms_threshold=0.5):
+	def nms(self, classes, scores, bboxes, top_k=-1, nms_threshold=0.5):
 		"""
 		对每一层特征图中筛选出的检验框进行非极大值抑制
 		Args:
