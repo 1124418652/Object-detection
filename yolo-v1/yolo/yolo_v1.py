@@ -12,9 +12,9 @@ import time
 import datetime
 import numpy as np 
 import tensorflow as tf 
-import config as cfg
+import yolo.config as cfg
 sys.path.append('../utils')
-from pascal_voc import Pascal_voc
+from utils.pascal_voc import Pascal_voc
 import timer
 slim = tf.contrib.slim
 

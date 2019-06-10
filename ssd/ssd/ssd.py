@@ -1,5 +1,13 @@
 #-*- coding: utf-8 -*-
+"""
+Created on 2019/6/10
+
+@Author: xhj
+"""
+
+import os
 import cv2
+import time
 import config as cfg
 import numpy as np 
 import tensorflow as tf
@@ -7,286 +15,473 @@ import tensorflow as tf
 
 class SSD(object):
 
-	def __init__(self, threshold=0.6):
-		"""
-		构造函数
-		Args:
-			threshold: 判断是否保留先验框的阈值
-		"""
+    def __init__(self, threshold=0.6):
+        """
+        构造函数
+        Args:
+            threshold: 判断是否保留先验框的阈值
+        """
 
-		self.num_boxes = []
-		self.feature_map_size = cfg.FEATURE_MAP_SIZE
-		self.classes = cfg.CLASSES
-		self.img_size = (cfg.IMAGE_SIZE, cfg.IMAGE_SIZE)
-		self.num_classes = cfg.NUM_CLASSES  # 21
+        self.feature_map_size = cfg.FEATURE_MAP_SIZE
+        self.classes_name = cfg.CLASSES
+        self.img_size = (cfg.IMAGE_SIZE, cfg.IMAGE_SIZE)
+        self.num_classes = cfg.NUM_CLASSES  # 21
 
-		# 6个特征图对应的参数
-		self.feature_layers = cfg.FEATURE_LAYERS
-		self.boxes_num = cfg.BOXES_NUM    # 每个像素点对应的先验框数目
-		self.is_L2norm = cfg.IS_L2NORM
-		self.n_boxes = cfg.N_BOXES        # 每个特征图的先验框数目
+        # 6个特征图对应的参数
+        self.feature_layers = cfg.FEATURE_LAYERS
+        self.boxes_num = cfg.BOXES_NUM    # 每个像素点对应的先验框数目
+        self.is_L2norm = cfg.IS_L2NORM
+        self.n_boxes = cfg.N_BOXES        # 每个特征图的先验框数目
 
-		# anchor 生成参数
-		self.anchor_sizes = cfg.ANCHOR_SIZES
-		self.anchor_ratios = cfg.ANCHOR_RATIOS
+        # anchor 生成参数
+        self.anchor_sizes = cfg.ANCHOR_SIZES
+        self.anchor_ratios = cfg.ANCHOR_RATIOS
+        self.anchor_steps = cfg.ANCHOR_STEPS
 
-		# 网络输出的偏移量的缩放系数
-		self.prior_scaling = cfg.PRIOR_SCALING
-		self.threshold = threshold
-
-
-	def l2norm(self, X, trainable=True, scope='L2Normalization'):
-		n_channles = X.get_shape().as_list()[-1]   # 获取特征图的通道数
-		l2_norm = tf.nn.l2_normalize(X, axis=[3], epsilon=1e-12)    # 只在channels维度上做归一化
-		with tf.variable_scope(scope):
-			gamma = tf.get_variable('gamma', shape=[n_channles,], dtype=tf.float32,
-				trainable=trainable)
-			return l2_norm * gamma
+        # 网络输出的偏移量的缩放系数
+        self.prior_scaling = cfg.PRIOR_SCALING
+        self.threshold = threshold
+        self.show_info = []
 
 
-	def feat_map_prediction(self, X, num_classes, boxes_num, is_L2norm, scope='multibox'):
-		"""
-		从一层 feature map 中预测坐标和类别
-		Args:
-			X: 4-D tensor, [batch_num, width, height, channels]
-			num_classes: int type, 21
-			boxes_num: int type, 该层特征图中
-			is_L2norm: boolean, 表示是否需要进行L2归一化
-		"""
-		reshape = [-1] + X.get_shape().as_list()[1:-1]  # 只需要feature map的width和height
-		with tf.variable_scope(scope):
-			if is_L2norm:
-				X = self.l2norm(X)
-			# 先预测位置 --> x, y, w, h    回归问题
-			location_pred = self.conv2d(X, filter=boxes_num * 4, ksize=[3, 3],
-				activation=None, scope='conv_loc')   # 不需要激活函数
-			location_pred = tf.reshape(location_pred, reshape + [boxes_num, 4])
-			# 预测类别   --> class   分类问题，需要经过softmax层
-			class_pred = self.conv2d(X, filter=boxes_num * num_classes, ksize=[3, 3],
-				activation=None, scope='conv_cls')
-			class_pred = tf.reshape(class_pred, reshape + [boxes_num, num_classes])
-			return location_pred, class_pred
+    def l2norm(self, X, trainable=True, scope='L2Normalization'):
+        n_channles = X.get_shape().as_list()[-1]   # 获取特征图的通道数
+        l2_norm = tf.nn.l2_normalize(X, axis=[3], epsilon=1e-12)    # 只在channels维度上做归一化
+        with tf.variable_scope(scope):
+            gamma = tf.get_variable('gamma', shape=[n_channles,], dtype=tf.float32,
+                trainable=trainable)
+            return l2_norm * gamma
 
 
-	def conv2d(self, X, filter, ksize, stride=[1,1], padding='same',
-		dilation=[1,1], activation=tf.nn.relu, scope='conv2d'):
-		"""
-		执行卷积运算
-		Args:
-			X: 4-D tensor
-			filter: int 类型，卷积核的数目
-			ksize: [int, int]，卷积核的尺寸
-			dilation: 卷积核的扩张率
-		"""
-		return tf.layers.conv2d(inputs=X, filters=filter, kernel_size=ksize, 
-			strides=stride, dilation_rate=dilation, padding=padding, name=scope)
+    def feat_map_prediction(self, X, num_classes, boxes_num, is_L2norm, scope='multibox'):
+        """
+        从一层 feature map 中预测坐标和类别
+        Args:
+            X: 4-D tensor, [batch_num, width, height, channels]
+            num_classes: int type, 21
+            boxes_num: int type, 该层特征图中
+            is_L2norm: boolean, 表示是否需要进行L2归一化
+        """
+        reshape = [-1] + X.get_shape().as_list()[1:-1]  # 只需要feature map的width和height
+        with tf.variable_scope(scope):
+            if is_L2norm:
+                X = self.l2norm(X)
+            # 先预测位置 --> x, y, w, h    回归问题
+            location_pred = self.conv2d(X, filter=boxes_num * 4, ksize=[3, 3],
+                activation=None, scope='conv_loc')   # 不需要激活函数
+            location_pred = tf.reshape(location_pred, reshape + [boxes_num, 4])
+            # 预测类别   --> class   分类问题，需要经过softmax层
+            class_pred = self.conv2d(X, filter=boxes_num * num_classes, ksize=[3, 3],
+                activation=None, scope='conv_cls')
+            class_pred = tf.reshape(class_pred, reshape + [boxes_num, num_classes])
+            return location_pred, class_pred
 
 
-	def max_pool2d(self, X, psize, stride, scope='max_pool2d'):
-		return tf.layers.max_pooling2d(inputs=X, pool_size=psize,
-			strides=stride, name=scope, padding='same')
+    def conv2d(self, X, filter, ksize, stride=[1,1], padding='same',
+        dilation=[1,1], activation=tf.nn.relu, scope='conv2d'):
+        """
+        执行卷积运算
+        Args:
+            X: 4-D tensor
+            filter: int 类型，卷积核的数目
+            ksize: [int, int]，卷积核的尺寸
+            dilation: 卷积核的扩张率
+        """
+        return tf.layers.conv2d(inputs=X, filters=filter, kernel_size=ksize, 
+            strides=stride, dilation_rate=dilation, padding=padding, name=scope)
 
 
-	def pad2d(self, X, pad):
-		return tf.pad(X, paddings=[[0, 0], [pad, pad], [pad, pad], [0, 0]])
+    def max_pool2d(self, X, psize, stride, scope='max_pool2d'):
+        return tf.layers.max_pooling2d(inputs=X, pool_size=psize,
+            strides=stride, name=scope, padding='same')
 
 
-	def dropout(self, X, d_rate=0.5):
-		return tf.layers.dropout(inputs=X, rate=d_rate)
+    def pad2d(self, X, pad):
+        return tf.pad(X, paddings=[[0, 0], [pad, pad], [pad, pad], [0, 0]])
 
 
-	def build_net(self):
-		"""
-		构建SSD的基础网络架构
-		"""
-
-		check_points = {}  # 用于提取第4,7~11层的feature map
-		X = tf.placeholder(dtype=tf.float32, shape=[None, 300, 300, 3])
-		with tf.variable_scope('ssd_300_vgg'):
-			# group1
-			net = self.conv2d(X, 64, [3, 3], scope='conv1_1')
-			net = self.conv2d(net, 64, [3, 3], scope='conv1_2')
-			net = self.max_pool2d(net, psize=[2, 2], stride=[2, 2], scope='pool1')
-
-			# group2
-			net = self.conv2d(net, 128, [3, 3], scope='conv2_1')
-			net = self.conv2d(net, 128, [3, 3], scope='conv2_2')
-			net = self.max_pool2d(net, psize=[2, 2], stride=[2, 2], scope='pool2')
-
-			# group3
-			net = self.conv2d(net, 256, [3, 3], scope='conv3_1')
-			net = self.conv2d(net, 256, [3, 3], scope='conv3_2')
-			net = self.conv2d(net, 256, [3, 3], scope='conv3_3')
-			net = self.max_pool2d(net, psize=[2, 2], stride=[2, 2], scope='pool3')
-
-			# group4
-			net = self.conv2d(net, 512, [3, 3], scope='conv4_1')
-			net = self.conv2d(net, 512, [3, 3], scope='conv4_2')
-			net = self.conv2d(net, 512, [3, 3], scope='conv4_3')
-			check_points['block4'] = net
-			net = self.max_pool2d(net, psize=[2, 2], stride=[2, 2], scope='pool4')
-
-			# group5
-			net = self.conv2d(net, 512, [3, 3], scope='conv5_1')
-			net = self.conv2d(net, 512, [3, 3], scope='conv5_2')
-			net = self.conv2d(net, 512, [3, 3], scope='conv5_3')
-			net = self.max_pool2d(net, psize=[3, 3], stride=[1, 1], scope='pool5')
-
-			# group6
-			# 采用了空洞卷积
-			net = self.conv2d(net, 1024, [3, 3], dilation=[6, 6], scope='conv6')
-
-			# group7
-			net = self.conv2d(net, 1024, [3, 3], scope='conv7')
-			check_points['block7'] = net
-
-			# group8
-			net = self.conv2d(net, 256, [1, 1], scope='conv8_1x1')
-			net = self.conv2d(self.pad2d(net, 1), 512, [3, 3], stride=[2, 2], padding='valid',
-				scope='conv8_3x3')
-			check_points['block8'] = net
-
-			# group9
-			net = self.conv2d(net, 128, [1, 1], scope='conv9_1x1')
-			net = self.conv2d(self.pad2d(net, 1), 256, [3, 3], stride=[2, 2], padding='valid',
-				scope='conv9_3x3')
-			check_points['block9'] = net
-
-			# group10
-			net = self.conv2d(net, 128, [1, 1], scope='conv10_1x1')
-			net = self.conv2d(net, 256, [3, 3], padding='valid', scope='conv10_3x3')
-			check_points['block10'] = net
-
-			# group11
-			net = self.conv2d(net, 128, [1, 1], scope='conv11_1x1')
-			net = self.conv2d(net, 256, [3, 3], padding='valid', scope='conv11_3x3')
-			check_points['block11'] = net
-
-			locations = []
-			predictions = []
-			for index, layer in enumerate(self.feature_layers):
-				location_pred, class_pred = self.feat_map_prediction(
-					X = check_points[layer],
-					num_classes=self.num_classes,
-					boxes_num=self.boxes_num[index],
-					is_L2norm=self.is_L2norm[index], 
-					scope=layer + '_box')
-				locations.append(location_pred)
-				predictions.append(tf.nn.softmax(class_pred))
-			return X, locations, predictions
+    def dropout(self, X, d_rate=0.5):
+        return tf.layers.dropout(inputs=X, rate=d_rate)
 
 
-	@staticmethod
-	def ssd_anchor_layer(img_size, feature_map_size, anchor_size,
-		anchor_ratio, anchor_step, box_num, offset=0.5):
-		"""
-		在单层 feature map 中生成锚框
-		Args:
-			img_size: 1-D list with 2 elements, (rows, cols)
-			feature_map_size: 1-D list or tupple with 2 elements, (rows, cols)
-			anchor_size: 锚框的尺寸信息
-			anchor_ratio: 锚框缩放比例
-			anchor_step: 该特征图与原图的比例
-			box_num: 该特征图中每个像素点对应的锚框数目
-			offset: 锚框中心相对于网格左上角点的偏移量
-		"""
-		y, x = np.mgrid[0:feature_map_size[0], 0:feature_map_size[1]]      # 生成网格左上角点
-		y = (y.astype(np.float32) + offset) * anchor_step / img_size[0]    # 得到锚框在原图上的中点坐标
-		x = (x.astype(np.float32) + offset) * anchor_step / img_size[1]
+    def build_net(self):
+        """
+        构建SSD的基础网络架构
+        """
 
-		# expand dims to support easy broadcasting in function ssd_decode()
-		x = np.expand_dims(x, axis=-1)
-		y = np.expand_dims(y, axis=-1)
+        check_points = {}  # 用于提取第4,7~11层的feature map
+        X = tf.placeholder(dtype=tf.float32, shape=[None, 300, 300, 3])
+        with tf.variable_scope('ssd_300_vgg'):
+            # group1
+            net = self.conv2d(X, 64, [3, 3], scope='conv1_1')
+            net = self.conv2d(net, 64, [3, 3], scope='conv1_2')
+            net = self.max_pool2d(net, psize=[2, 2], stride=[2, 2], scope='pool1')
 
-		# calculate the width and height of every anchors
-		h = np.zeros((box_num, ), dtype=np.float32)
-		w = np.zeros((box_num, ), dtype=np.float32)
+            # group2
+            net = self.conv2d(net, 128, [3, 3], scope='conv2_1')
+            net = self.conv2d(net, 128, [3, 3], scope='conv2_2')
+            net = self.max_pool2d(net, psize=[2, 2], stride=[2, 2], scope='pool2')
 
-		h[0] = anchor_size[0] / img_size[0]
-		w[0] = anchor_size[0] / img_size[1]
-		h[1] = (anchor_size[0] * anchor_size[1]) ** 0.5 / img_size[0]
-		w[1] = (anchor_size[0] * anchor_size[1]) ** 0.5 / img_size[1]
+            # group3
+            net = self.conv2d(net, 256, [3, 3], scope='conv3_1')
+            net = self.conv2d(net, 256, [3, 3], scope='conv3_2')
+            net = self.conv2d(net, 256, [3, 3], scope='conv3_3')
+            net = self.max_pool2d(net, psize=[2, 2], stride=[2, 2], scope='pool3')
 
-		for i, ratio in enumerate(anchor_ratio):
-			h[i + 2] = anchor_size[0] / img_size[0] / (ratio ** 0.5)    # 从第三位开始添加
-			w[i + 2] = anchor_size[0] / img_size[1] * (ratio ** 0.5)
+            # group4
+            net = self.conv2d(net, 512, [3, 3], scope='conv4_1')
+            net = self.conv2d(net, 512, [3, 3], scope='conv4_2')
+            net = self.conv2d(net, 512, [3, 3], scope='conv4_3')
+            check_points['block4'] = net
+            net = self.max_pool2d(net, psize=[2, 2], stride=[2, 2], scope='pool4')
 
-		return x, y, w, h
+            # group5
+            net = self.conv2d(net, 512, [3, 3], scope='conv5_1')
+            net = self.conv2d(net, 512, [3, 3], scope='conv5_2')
+            net = self.conv2d(net, 512, [3, 3], scope='conv5_3')
+            net = self.max_pool2d(net, psize=[3, 3], stride=[1, 1], scope='pool5')
 
+            # group6
+            # 采用了空洞卷积
+            net = self.conv2d(net, 1024, [3, 3], dilation=[6, 6], scope='conv6')
 
-	@staticmethod
-	def ssd_decode(location, box, prior_scaling):
-		"""
-		对单层特征图的网络输出解码
-		Args:
-			location: 5-D tensor, 网络输出的预测坐标值, [batch_size, height, width, anchor_box, coordinations]
-			box: 默认的锚框坐标及长宽，(x, y, w, h)
-			prior_scaling: 先验框的缩放比例
-		Returns:
-			bboxes: 5-D tensor, 解码后的预测框， [batch_size, height, width, box, coordination]
-					其中coordination表示的是预测框的左上角坐标和右下角坐标
-		"""
+            # group7
+            net = self.conv2d(net, 1024, [1, 1], scope='conv7')
+            check_points['block7'] = net
 
-		anchor_x, anchor_y, anchor_w, anchor_h = box 
-		center_x = location[:, :, :, :, 0] * prior_scaling[0] * anchor_w + anchor_x 
-		center_y = location[:, :, :, :, 1] * prior_scaling[1] * anchor_h + anchor_y
-		w = anchor_w * tf.exp(location[:, :, :, :, 2] * prior_scaling[2])
-		h = anchor_h * tf.exp(location[:, :, :, :, 3] * prior_scaling[3])
-		bboxes = tf.stack([center_x - w / 2.0, center_y - h / 2.0, 
-						   center_x + w / 2.0, center_y + h / 2.0],
-						   axis=-1)
-		return bboxes
+            # group8
+            net = self.conv2d(net, 256, [1, 1], scope='conv8_1x1')
+            net = self.conv2d(self.pad2d(net, 1), 512, [3, 3], stride=[2, 2], padding='valid',
+                scope='conv8_3x3')
+            check_points['block8'] = net
 
+            # group9
+            net = self.conv2d(net, 128, [1, 1], scope='conv9_1x1')
+            net = self.conv2d(self.pad2d(net, 1), 256, [3, 3], stride=[2, 2], padding='valid',
+                scope='conv9_3x3')
+            check_points['block9'] = net
 
-	def choose_anchor_boxes(self, prediction, bboxes, threshold=None):
-		"""
-		对单层特征图的检验框进行阈值筛选，筛选出检验框所属类别的概率值>阈值的检验框
-		Args:
-			prediction: 5-D tensor, 网络输出的每个类别的预测概率,
-						 [batch_size, height, width, boxes, classes]
-			bboxes: 5-D tensor, 通过 ssd_decode() 解码得到的检验框
-			threshold: 检验框所属类别概率的阈值
-		"""
+            # group10
+            net = self.conv2d(net, 128, [1, 1], scope='conv10_1x1')
+            net = self.conv2d(net, 256, [3, 3], padding='valid', scope='conv10_3x3')
+            check_points['block10'] = net
 
-		if not threshold:
-			threshold = self.threshold
-		bboxes = tf.reshape(bboxes, [-1, 4])
-		prediction = tf.reshape(prediction, [-1, self.num_classes])
-		prediction = prediction[:, 1:]    # 提取除背景类外的所有类别
-		max_classes = tf.argmax(prediction, axis=-1) + 1  # 提取索引,加1是因为从1开始
-		scores = tf.reduce_max(prediction, axis=-1)       # 提取值
+            # group11
+            net = self.conv2d(net, 128, [1, 1], scope='conv11_1x1')
+            net = self.conv2d(net, 256, [3, 3], padding='valid', scope='conv11_3x3')
+            check_points['block11'] = net
 
-		filter_mask = scores > threshold
-		max_classes = tf.boolean_mask(max_classes, filter_mask)
-		scores = tf.boolean_mask(scores, filter_mask)
-		bboxes = tf.boolean_mask(bboxes, filter_mask)
-
-		return max_classes, scores, bboxes
+            locations = []
+            predictions = []
+            if 0 < len(self.show_info):
+                self.show_info = []
+            for index, layer in enumerate(self.feature_layers):
+                self.show_info.append("Size of layer %(index)s's feature map: %(size)s"%{'index':layer, 
+                    'size':check_points[layer].get_shape().as_list()})
+                location_pred, class_pred = self.feat_map_prediction(
+                    X = check_points[layer],
+                    num_classes=self.num_classes,
+                    boxes_num=self.boxes_num[index],
+                    is_L2norm=self.is_L2norm[index], 
+                    scope=layer + '_box')
+                locations.append(location_pred)
+                predictions.append(tf.nn.softmax(class_pred))
+            return X, locations, predictions
 
 
-	def nms(self, classes, scores, bboxes, top_k=-1, nms_threshold=0.5):
-		"""
-		对每一层特征图中筛选出的检验框进行非极大值抑制
-		Args:
-			classes: 1-D tensor, 检验框对应的类别, shape: [bboxes_num]
-			scores: 1-D tensor, 检验框预测类别的概率, shape: [bboxes_num]
-			bboxes: 2-D tensor, 检验框的坐标, shape: [bboxes_num, 4]
-			nms_threshold: 判断两个检验框重合的iou阈值
-		"""
-		assert scores.shape[0] == bboxes.shape[0] == bboxes.shape[0] 
-		keep_boxes = []
-		indexes = np.argsort(-scores)     # 按置信度倒序排序，得到排序后的索引值
-		classes = classes[indexes]
-		scores = scores[indexes]
-		bboxes = bboxes[indexes]
+    @staticmethod
+    def ssd_anchor_layer(img_size, feature_map_size, anchor_size,
+        anchor_ratio, anchor_step, box_num, offset=0.5):
+        """
+        在单层 feature map 中生成锚框
+        Args:
+            img_size: 1-D list with 2 elements, (rows, cols)
+            feature_map_size: 1-D list or tupple with 2 elements, (rows, cols)
+            anchor_size: 锚框的尺寸信息
+            anchor_ratio: 锚框缩放比例
+            anchor_step: 该特征图与原图的比例
+            box_num: 该特征图中每个像素点对应的锚框数目
+            offset: 锚框中心相对于网格左上角点的偏移量
+        Returns:
+            x: 2-D ndarray, shape [feat_map_size, feat_map_size], 表示特征图中每个像素
+               位置对应的中心坐标x
+            y: 2-D ndarray, 表示特征图中每个像素位置对应的中心坐标y
+            w, h: 1-D ndarray, shape [box_num], 同一特征图中所有像素位置的锚框的数目以及w和h都是
+                  一样的，所以只需要用一维数组来表示即可
+        """
+        y, x = np.mgrid[0:feature_map_size[0], 0:feature_map_size[1]]      # 生成网格左上角点
+        y = (y.astype(np.float32) + offset) * anchor_step / img_size[0]    # 得到锚框在原图上的中点坐标
+        x = (x.astype(np.float32) + offset) * anchor_step / img_size[1]
 
+        # expand dims to support easy broadcasting in function ssd_decode()
+        x = np.expand_dims(x, axis=-1)
+        y = np.expand_dims(y, axis=-1)
+
+        # calculate the width and height of every anchors
+        h = np.zeros((box_num, ), dtype=np.float32)
+        w = np.zeros((box_num, ), dtype=np.float32)
+
+        h[0] = anchor_size[0] / img_size[0]
+        w[0] = anchor_size[0] / img_size[1]
+        h[1] = (anchor_size[0] * anchor_size[1]) ** 0.5 / img_size[0]
+        w[1] = (anchor_size[0] * anchor_size[1]) ** 0.5 / img_size[1]
+
+        for i, ratio in enumerate(anchor_ratio):
+            h[i + 2] = anchor_size[0] / img_size[0] / (ratio ** 0.5)    # 从第三位开始添加
+            w[i + 2] = anchor_size[0] / img_size[1] * (ratio ** 0.5)
+
+        return x, y, w, h
+
+
+    @staticmethod
+    def ssd_decode(location, anchor, prior_scaling):
+        """
+        对单层特征图的网络输出解码
+        Args:
+            location: 5-D tensor, 网络输出的预测坐标值, [batch_size, height, width, anchor_box, coordinations]
+            anchor: 默认的锚框坐标及长宽，(x, y, w, h)
+            prior_scaling: 先验框的缩放比例
+        Returns:
+            bboxes: 5-D tensor, 解码后的预测框， [batch_size, height, width, box, coordination]
+                    其中coordination表示的是预测框的左上角坐标和右下角坐标
+        """
+
+        anchor_x, anchor_y, anchor_w, anchor_h = anchor 
+        center_x = location[:, :, :, :, 0] * prior_scaling[0] * anchor_w + anchor_x 
+        center_y = location[:, :, :, :, 1] * prior_scaling[1] * anchor_h + anchor_y
+        w = anchor_w * tf.exp(location[:, :, :, :, 2] * prior_scaling[2])
+        h = anchor_h * tf.exp(location[:, :, :, :, 3] * prior_scaling[3])
+        bboxes = tf.stack([center_x - w / 2.0, center_y - h / 2.0, 
+                           center_x + w / 2.0, center_y + h / 2.0],
+                           axis=-1)
+        return bboxes
+
+
+    def choose_anchor_boxes(self, prediction, bboxes, threshold=None):
+        """
+        对单层特征图的检验框进行阈值筛选，筛选出检验框所属类别的概率值>阈值的检验框，调用该函数时有个前提条件是batch
+        size 维度要么没有，要么值为1
+        Args:
+            prediction: 5-D tensor, 网络输出的每个类别的预测概率,
+                         [batch_size, height, width, boxes, classes]
+            bboxes: 5-D tensor, 通过 ssd_decode() 解码得到的检验框
+            threshold: 检验框所属类别概率的阈值
+        """
+
+        if not threshold:
+            threshold = 0.6
+        bboxes = tf.reshape(bboxes, [-1, 4])
+        prediction = tf.reshape(prediction, [-1, self.num_classes])
+        prediction = prediction[:, 1:]    # 提取除背景类外的所有类别
+        max_classes = tf.argmax(prediction, axis=-1) + 1  # 提取索引,加1是因为从1开始
+        scores = tf.reduce_max(prediction, axis=-1)       # 提取值
+
+        filter_mask = scores > threshold
+        max_classes = tf.boolean_mask(max_classes, filter_mask)
+        scores = tf.boolean_mask(scores, filter_mask)
+        bboxes = tf.boolean_mask(bboxes, filter_mask)
+
+        return max_classes, scores, bboxes
+
+
+    def get_result(self, locations, predictions):
+        """
+        从SSD网络的输出中筛选得到完整的classes，scores，bboxes结果，有个前提条件是batch_size必须为1
+        Args:
+            locations: build_network()的输出，从6个特征图中预测得到的bboxes坐标
+            predictions: build_network()的输出，从6个特征图中预测得到的每个bboxes对应的类别概率
+        """
+
+        layers_anchors = []
+        classes_list = []
+        scores_list = []
+        bboxes_list = []
+
+        # 分别计算每一层特征图的anchor boxes
+        for index, size in enumerate(self.feature_map_size):
+            anchors = self.ssd_anchor_layer(self.img_size, size, 
+                                           self.anchor_sizes[index],
+                                           self.anchor_ratios[index],
+                                           self.anchor_steps[index],
+                                           self.boxes_num[index],
+                                           offset=0.5)
+            layers_anchors.append(anchors)
+        
+        # 分别计算predict boxes, classes 以及 scores
+        for i in range(6):
+            predict_boxes = self.ssd_decode(locations[i], layers_anchors[i], 
+                self.prior_scaling)
+            max_classes, scores, bboxes = self.choose_anchor_boxes(predictions[i], 
+                predict_boxes, self.threshold)
+            classes_list.append(max_classes)
+            scores_list.append(scores)
+            bboxes_list.append(bboxes)
+
+        # 将不同特征图的预测结果进行拼接
+        classes = tf.concat(classes_list, axis=0)
+        scores = tf.concat(scores_list, axis=0)
+        pboxes = tf.concat(bboxes_list, axis=0)
+        return classes, scores, pboxes
+
+
+    @staticmethod
+    def nms(classes, scores, bboxes, top_k=-1, nms_threshold=0.5):
+        """
+        对每一层特征图中筛选出的检验框进行非极大值抑制
+        Args:
+            classes: 1-D tensor, 检验框对应的类别, shape: [bboxes_num]
+            scores: 1-D tensor, 检验框预测类别的概率, shape: [bboxes_num]
+            bboxes: 2-D tensor, 检验框的坐标, shape: [bboxes_num, 4]
+            nms_threshold: 判断两个检验框重合的iou阈值
+        """
+        assert scores.shape[0] == bboxes.shape[0] == bboxes.shape[0] 
+        indexes = np.argsort(-scores)     # 按置信度倒序排序，得到排序后的索引值
+        classes = classes[indexes][:top_k]
+        scores = scores[indexes][:top_k]
+        bboxes = bboxes[indexes][:top_k]
+        keep_boxes = np.ones(scores.shape, dtype=np.bool)
+        for i in range(scores.shape[0] - 1):
+            if keep_boxes[i]:
+                ious = SSD.calculate_iou(bboxes[i], bboxes[i+1:])
+                keep_overlap = np.logical_or(ious < nms_threshold, classes[i] != classes[i+1:])
+                keep_boxes[i+1:] = np.logical_and(keep_boxes[i+1:], keep_overlap)
+        indexes_selected = np.where(keep_boxes)
+        return classes[indexes_selected], scores[indexes_selected], bboxes[indexes_selected]
+
+
+    @staticmethod
+    def calculate_iou(boxes1, boxes2):
+        """
+        计算两组候选框之间的iou
+        Args:
+            boxes1: 2-D ndarray, [1, 4](xmin, ymin, xmax, ymax)
+            boxes2: 2-D ndarray, [num_boxes, 4](xmin, ymin, xmax, ymax)
+        Returns:
+            iou: 1-D ndarray, [num_boxes] 
+        """
+        if not boxes1.ndim == 2:
+            boxes1 = np.expand_dims(boxes1, axis = 0)
+        if not boxes2.ndim == 2:
+            boxes2 = np.expand_dims(boxes2, axis = 0)
+
+        xmin = np.maximum(boxes1[:, 0], boxes2[:, 0])
+        ymin = np.maximum(boxes1[:, 1], boxes2[:, 1])
+        xmax = np.minimum(boxes1[:, 2], boxes2[:, 2])
+        ymax = np.maximum(boxes1[:, 3], boxes2[:, 3])
+
+        # 计算两组矩形框的交集
+        height = np.maximum(ymax - ymin, 0.)
+        width = np.maximum(xmax - xmin, 0.)
+        inter_area = height * width
+        area1 = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])
+        area2 = (boxes2[:, 2] - boxes2[:, 0]) * (boxes2[:, 3] - boxes2[:, 1])
+        iou = inter_area / (area1 + area2 - inter_area)
+        return iou
+
+
+class SSD_DETECTOR(SSD):
+
+    def __init__(self, weight_file='../weight/ssd_vgg_300_weights.ckpt'):
+        """
+        初始化SSD检测网络所需的变量
+        Args:
+            weight_file: SSD 网络权重文件的路径
+        """
+        SSD.__init__(self, 0.6)
+        self.inputX, self.locations, self.predictions = self.build_net()
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = True
+        self.sess = tf.Session(config=config)      # 创建会话
+
+        # if not os.path.exists(weight_file):
+        #   raise ValueError("file {filename} is not existed.".format(filename = weight_file))
+        
+        # 导入模型的权重文件
+        print("\nStart loading weight file...")
+        begin = time.time()
+        saver = tf.train.Saver()
+        saver.restore(self.sess, weight_file)
+        print("Finishing loading weight file, time used: %.3f s\n"%(time.time()-begin))
+
+        # 网络变量初始化
+        print("Start initializing parameters of network...")
+        begin = time.time()
+        print("size of network input: ", self.inputX.get_shape().as_list())
+        for info in self.show_info:
+            print(info)
+        self.sess.run(tf.global_variables_initializer())
+        self.classes, self.scores, self.pboxes = self.get_result(self.locations, 
+            self.predictions)
+        print("Finish initializing parameters. time used: %.3f s\n"%(time.time()-begin))
+
+
+    def _draw_rectangle(self, image, classes, scores, bboxes, 
+        colors=(0, 0, 255), thickness=2):
+        """
+        在输入图片中绘制检测出的目标框
+        Args:
+            image: 3-D array, the image to detect
+            classes: 1-D array, the classes of every detected boxes
+            scores: 1-D array, the scores of every detected boxes
+            bboxes: 2-D array, shape of [num_boxes, 4], the coordinations of boxes
+        """
+        if not 3 == image.ndim:
+            raise ValueError
+
+        height, width = image.shape[:2]
+        for i in range(classes.shape[0]):
+            box = bboxes[i]
+            class_name = self.classes_name[classes[i]-1]
+            score = scores[i]
+            info = "%s: %.3f" % (class_name, score)
+            print(info)
+            minx = int(box[0] * width)
+            miny = int(box[1] * height)
+            maxx = int(box[2] * width)
+            maxy = int(box[3] * height)
+            cv2.rectangle(image, (minx, miny), (maxx, maxy), colors, thickness)
+            cv2.rectangle(image, (minx, miny - 20), (maxx, miny), (125, 125, 125), -1)
+            cv2.putText(image, info, (minx - 20 + 2, miny - 20 + 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 
+                (0, 0, 0), 1)
+
+
+    def image_detect(self, image, one_img=True):
+        """
+        detect objects in input image
+        Args:
+            image: 3-D ndarray, input image, rgb format
+            one_img: boolean type, 如果为True，在该函数中关闭会话
+        """
+
+        if 3 != image.ndim:
+            raise ValueError("Must input 3-D array image!")
+        tmp_image = image.copy()
+        height, width = image.shape[:2]
+        means = np.array([123., 117., 104.])
+        image = np.expand_dims(cv2.resize(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)-means, self.img_size), 
+            axis=0)
+        classes, scores, bboxes = self.sess.run([self.classes, self.scores, self.pboxes], 
+            feed_dict={self.inputX: image})
+        print("done")
+        print(classes.shape)
+        classes, scores, bboxes = SSD.nms(classes, scores, bboxes)
+        print(classes.shape)
+        self._draw_rectangle(tmp_image, classes, scores, bboxes)
+        return tmp_image
 
 
 if __name__ == '__main__':
-	ssd = SSD()
-	X, locations, predictions = ssd.build_net()
-	box = SSD.ssd_anchor_layer(ssd.img_size, (38, 38), (21, 45), [2, 0.5], 8, 4)
-	boxes = ssd.ssd_decode(locations[0], box, ssd.prior_scaling)
-	max_classes, scores, bboxes = ssd.choose_anchor_boxes(predictions[0], boxes)
-	# ssd.nms(max_classes, scores, bboxes)
-	print(boxes)
+    # ssd = SSD()
+    # X, locations, predictions = ssd.build_net()
+    # box = SSD.ssd_anchor_layer(ssd.img_size, (38, 38), (21, 45), [2, 0.5], 8, 4)
+    # boxes = ssd.ssd_decode(locations[0], box, ssd.prior_scaling)
+    # max_classes, scores, bboxes = ssd.choose_anchor_boxes(predictions[0], boxes)
+    # # ssd.nms(max_classes, scores, bboxes)
+    # print(boxes)
+
+    detector = SSD_DETECTOR('../weight/ssd_vgg_300_weights.ckpt')
+    image = cv2.imread("../../yolo-v1/test-images/1.jpg")
+    # cv2.imshow("image", image)
+    detect_image = detector.image_detect(image)
+    cv2.imshow("detect image", detect_image)
+    cv2.waitKey(0)

@@ -27,7 +27,7 @@ CLASSES = ['aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus',
            'motorbike', 'person', 'pottedplant', 'sheep', 'sofa',
            'train', 'tvmonitor']
 FLIPPED = True             # flip the image or not
-IMAGE_SIZE = 448
+IMAGE_SIZE = 300
 CELL_SIZE = 7              # the number of grids in output feature map
 BOXES_PER_CELL = 2         # the number of bbox of every grids
 ALPHA = 0.1                # the parameter for leaky relu

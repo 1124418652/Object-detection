@@ -14,7 +14,7 @@ import numpy as np
 import xml.etree.ElementTree as ET
 
 sys.path.append('../yolo/')
-import config as cfg
+import yolo.config as cfg
 
 
 class Pascal_voc(object):
