@@ -15,7 +15,7 @@ import tensorflow as tf
 
 class SSD(object):
 
-    def __init__(self, threshold=0.6):
+    def __init__(self, threshold=0.2):
         """
         构造函数
         Args:
@@ -88,7 +88,8 @@ class SSD(object):
             dilation: 卷积核的扩张率
         """
         return tf.layers.conv2d(inputs=X, filters=filter, kernel_size=ksize, 
-            strides=stride, dilation_rate=dilation, padding=padding, name=scope)
+            strides=stride, dilation_rate=dilation, padding=padding, name=scope,
+            activation=activation)
 
 
     def max_pool2d(self, X, psize, stride, scope='max_pool2d'):
@@ -173,6 +174,7 @@ class SSD(object):
 
             locations = []
             predictions = []
+            logits = []
             if 0 < len(self.show_info):
                 self.show_info = []
             for index, layer in enumerate(self.feature_layers):
@@ -186,7 +188,8 @@ class SSD(object):
                     scope=layer + '_box')
                 locations.append(location_pred)
                 predictions.append(tf.nn.softmax(class_pred))
-            return X, locations, predictions
+                logits.append(class_pred)
+            return X, locations, predictions, logits
 
 
     @staticmethod
@@ -269,7 +272,7 @@ class SSD(object):
         """
 
         if not threshold:
-            threshold = 0.6
+            threshold = self.threshold
         bboxes = tf.reshape(bboxes, [-1, 4])
         prediction = tf.reshape(prediction, [-1, self.num_classes])
         prediction = prediction[:, 1:]    # 提取除背景类外的所有类别
@@ -320,8 +323,8 @@ class SSD(object):
         # 将不同特征图的预测结果进行拼接
         classes = tf.concat(classes_list, axis=0)
         scores = tf.concat(scores_list, axis=0)
-        pboxes = tf.concat(bboxes_list, axis=0)
-        return classes, scores, pboxes
+        bboxes = tf.concat(bboxes_list, axis=0)
+        return classes, scores, bboxes
 
 
     @staticmethod
@@ -387,11 +390,12 @@ class SSD_DETECTOR(SSD):
         Args:
             weight_file: SSD 网络权重文件的路径
         """
-        SSD.__init__(self, 0.6)
-        self.inputX, self.locations, self.predictions = self.build_net()
+        SSD.__init__(self, 0.2)
+        self.inputX, self.locations, self.predictions, _ = self.build_net()
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
         self.sess = tf.Session(config=config)      # 创建会话
+        self.sess.run(tf.global_variables_initializer())
 
         # if not os.path.exists(weight_file):
         #   raise ValueError("file {filename} is not existed.".format(filename = weight_file))
@@ -409,7 +413,6 @@ class SSD_DETECTOR(SSD):
         print("size of network input: ", self.inputX.get_shape().as_list())
         for info in self.show_info:
             print(info)
-        self.sess.run(tf.global_variables_initializer())
         self.classes, self.scores, self.pboxes = self.get_result(self.locations, 
             self.predictions)
         print("Finish initializing parameters. time used: %.3f s\n"%(time.time()-begin))
@@ -429,20 +432,22 @@ class SSD_DETECTOR(SSD):
             raise ValueError
 
         height, width = image.shape[:2]
+        objs = []
         for i in range(classes.shape[0]):
             box = bboxes[i]
             class_name = self.classes_name[classes[i]-1]
             score = scores[i]
             info = "%s: %.3f" % (class_name, score)
-            print(info)
+            objs.append(info)
             minx = int(box[0] * width)
             miny = int(box[1] * height)
             maxx = int(box[2] * width)
             maxy = int(box[3] * height)
             cv2.rectangle(image, (minx, miny), (maxx, maxy), colors, thickness)
             cv2.rectangle(image, (minx, miny - 20), (maxx, miny), (125, 125, 125), -1)
-            cv2.putText(image, info, (minx - 20 + 2, miny - 20 + 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 
-                (0, 0, 0), 1)
+            cv2.putText(image, info, (minx - 2, miny - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 
+                (0, 255, 0), 1)
+        return objs
 
 
     def image_detect(self, image, one_img=True):
@@ -455,23 +460,259 @@ class SSD_DETECTOR(SSD):
 
         if 3 != image.ndim:
             raise ValueError("Must input 3-D array image!")
+        
+        class Obj_result():
+            """
+            用于保存单幅图片中目标检测结果的类
+            """
+            
+            @property
+            def classes(self):
+                return self._classes
+
+            @classes.setter
+            def classes(self, classes):
+                if not  1 == classes.ndim:
+                    raise ValueError
+                self._classes = classes
+
+            @property
+            def scores(self):
+                return self._scores
+
+            @scores.setter
+            def scores(self, scores):
+                if not 1 == scores.ndim:
+                    raise ValueError
+                self._scores = scores
+            
+            @property
+            def bboxes(self):
+                return self._bboxes
+            
+            @bboxes.setter
+            def bboxes(self, bboxes):
+                if not 4 == bboxes.shape[-1]:
+                    raise ValueError
+                if 1 == bboxes.ndim:
+                    bboxes = np.expand_dims(bboxes, axis=0)
+                self._bboxes = bboxes
+
+            @property
+            def obj_list(self):
+                return self._obj_list
+            
+            @obj_list.setter
+            def obj_list(self, obj_list):
+                self._obj_list = obj_list
+
+            def __str__(self):
+                res = ""
+                for info in self._obj_list:
+                    res += (info + "\n")
+                return res
+
         tmp_image = image.copy()
         height, width = image.shape[:2]
         means = np.array([123., 117., 104.])
         image = np.expand_dims(cv2.resize(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)-means, self.img_size), 
             axis=0)
+
         classes, scores, bboxes = self.sess.run([self.classes, self.scores, self.pboxes], 
             feed_dict={self.inputX: image})
-        print("done")
-        print(classes.shape)
+        if 0 == classes.size:
+            return None
+
         classes, scores, bboxes = SSD.nms(classes, scores, bboxes)
-        print(classes.shape)
-        self._draw_rectangle(tmp_image, classes, scores, bboxes)
-        return tmp_image
+        obj_list = self._draw_rectangle(tmp_image, classes, scores, bboxes)
+        result = Obj_result()
+        result.classes = classes
+        result.scores = scores
+        result.bboxes = bboxes
+        result.show_image = tmp_image
+        result.obj_list = obj_list
+
+        if one_img:
+            self.sess.close()
+
+        return result
+
+
+    def video_detect(self, from_camera=True, file_path=None):
+        """
+        detect object from camera
+        Args:
+            from_camera: boolean type, the video is from camera if true
+            file_path: str type, the path of video file(parameter from_camera is False)
+        """
+
+        if from_camera:
+            cap = cv2.VideoCapture(0)
+            if not cap.isOpened():
+                raise ValueError("Can't open the camera!")
+            ret, frame = cap.read()
+            cv2.namedWindow("Image", 2)
+            while ret:
+                result = self.image_detect(frame, False)
+                if not result:
+                    cv2.imshow("Image", frame)
+                    ret, frame = cap.read()
+                else:
+                    cv2.imshow("Image", result.show_image)
+                    ret, frame = cap.read()
+                if 27 == cv2.waitKey(1):
+                    break
+            cv2.destroyAllWindows()
+
+        else:
+            try:
+                cap = cv2.VideoCapture(file_path)
+                ret, frame = cap.read()
+            except:
+                raise ValueError("Can't open the file: {0}".format(file_path))
+            cv2.namedWindow('Image', 2)
+            while ret:
+                result = self.image_detect(frame, False)
+                if not result:
+                    cv2.imshow("Image", frame)
+                    ret, frame = cap.read()
+                else:
+                    cv2.imshow("Image", result.show_image)
+                    ret, frame = cap.read()
+                if 27 == cv2.waitKey(1):
+                    break
+            cv2.destroyAllWindows()
+
+        self.sess.close()
+
+
+class SSD_SOLVER(SSD):
+
+    def __init__(self, train_dataset, weight_file=None, append_name=None):
+        """
+        initialize the Solver of SSD network
+        Args:
+            train_dataset: 用于制作训练数据集的对象
+            weight_file: 用于初始化的权重文件路径
+            append_name: 用于保存训练得到的权重文件的文件夹的附加信息
+        """
+
+        SSD.__init__(self)
+        self.data = train_dataset
+        if not weight_file:
+            weight_file = '../weight/ssd_vgg_300_weights.ckpt'
+        self.inputX, self.locations, self.predictions, self.logits = SSD.build_net()
+
+
+    def ssd_bboxes_encode_layer(labels,
+                                bboxes, 
+                                anchors_layer,
+                                num_classes,
+                                no_annotation_label,
+                                match_threshold=0.5, 
+                                prior_scaling=[0.1, 0.1, 0.2, 0.2],
+                                dtype=tf.float32):
+        """
+        Encode ground truth labels and bounding boxes using SSD anchors from
+        one layer.
+        Args:
+            labels: 1-D tensor(int64), containing ground truth labels
+            bboxes: Nx4 tensor(float), bbox relative coordinates(x1, y1, x2, y2)
+            anchors_layer: list type, containing [cx, cy, w, h], shape of cx and cy is 
+                           [map_size, map_size, 1], shape of w and h is [num_boxes_per_pixel]
+            num_classes: int type, the number of classes
+            no_annotation_label: int type, refers to background, 21
+            match_threshold: float, threshold for positive match with ground truth bboxes
+            prior_scaling: scaling for encoded coordinations
+        Returns:
+            (target_labels, target_locations, target_scores): Target tensor.
+        """
+
+        anchor_x, anchor_y, anchor_w, anchor_h = anchors_layer
+        anchor_xmin = anchor_x - anchor_w / 2.
+        anchor_ymin = anchor_y - anchor_h / 2.
+        anchor_xmax = anchor_x + anchor_w * 2.
+        anchor_ymax = anchor_y + anchor_h * 2.
+        anchors_area = (anchor_xmax - anchor_xmin) * (anchor_ymax - anchor_ymin)   # shape of [mapsize, mapsize, num_anchors]
+
+        # initialize tensors...
+        shape = (anchor_x.shape[0], anchor_x.shape[1], anchor_w.size)
+        feat_labels = tf.zeros(shape, dtype=tf.int64)
+        feat_scores = tf.zeros(shape, dtype=dtype)
+
+        feat_xmin = tf.zeros(shape, dtype=dtype)
+        feat_ymin = tf.zeros(shape, dtype=dtype)
+        feat_xmax = tf.zeros(shape, dtype=dtype)
+        feat_ymax = tf.zeros(shape, dtype=dtype)
+
+        def jaccard_with_anchors(bbox):
+            """
+            compute jaccard score between a box and the anchors
+            """
+            xmin = tf.maximum(anchor_xmin, bbox[0])
+            ymin = tf.maximum(anchor_ymin, bbox[1])
+            xmax = tf.minimum(anchor_xmax, bbox[2])
+            ymax = tf.minimum(anchor_ymax, bbox[3])
+            height = tf.maximum(ymax - ymin, 0.)
+            width = tf.maximum(xmax - xmin, 0.)
+            inter_area = height * width
+            union_area = anchors_area + (bbox[3] - bbox[1]) * (bbox[2] - bbox[0]) - inter_area
+            jaccard = tf.div(inter_area, union_area)
+            return jaccard
+
+        def intersection_with_anchors(bbox):
+            """
+            compute intersection between box and anchors
+            """
+            xmin = tf.maximum(anchor_xmin, bbox[0])
+            ymin = tf.maximum(anchor_ymin, bbox[1])
+            xmax = tf.minimum(anchor_xmax, bbox[2])
+            ymax = tf.minimum(anchor_ymax, bbox[3])
+            height = tf.maximum(ymax - ymin, 0.)
+            width = tf.maximum(xmax - xmin, 0.)
+            inter_area = height * width
+            scores = tf.div(inter_area, anchors_area)
+            return scores
+
+        def condition(i, feat_labels, feat_scores, feat_xmin, 
+            feat_ymin, feat_xmax, feat_ymax):
+            """
+            condition: check label index
+            Args:
+                需要包含所有在while_loop中需要更新的参数
+            """
+            r = tf.less(i, tf.shape(labels))   # 遍历所有的实际目标框
+            return r[0]
+
+        def body(i, feat_labels, feat_scores, feat_xmin,
+            feat_ymin, feat_xmax, feat_ymax):
+            """
+            Body: 在每步迭代中更新变量：feat_labels, feat_scores, 
+                  feat_xmin, feat_ymin, feat_xmax, feat_ymax
+            只有在符合以下原则时，才进行参数的更新：
+                - jaccard > 0.5
+                - 一个锚框只与一个iou最大的目标框进行匹配
+            """
+            label = labels[i]
+            bbox = bboxes[i]
+
+
+    def ssd_losses(self, logits, locations, gclasses, glocations,
+        gscores, match_threshold=0.5, negative_ratio=3.,
+        alpha=1., label_smoothing=0., device='/gpu:0',
+        scope=None):
+        """
+        计算SSD网络的损失函数，包含位置误差及类别误差的加权和
+        Args:
+            logits: list type, 6 层特征图中每一层的预测类别输出
+            locations: list type, 6 层特征图中每一层的预测位置输出
+            gclasses: 
+        """
+        
 
 
 if __name__ == '__main__':
-    # ssd = SSD()
+    ssd = SSD()
     # X, locations, predictions = ssd.build_net()
     # box = SSD.ssd_anchor_layer(ssd.img_size, (38, 38), (21, 45), [2, 0.5], 8, 4)
     # boxes = ssd.ssd_decode(locations[0], box, ssd.prior_scaling)
@@ -482,6 +723,9 @@ if __name__ == '__main__':
     detector = SSD_DETECTOR('../weight/ssd_vgg_300_weights.ckpt')
     image = cv2.imread("../../yolo-v1/test-images/1.jpg")
     # cv2.imshow("image", image)
-    detect_image = detector.image_detect(image)
-    cv2.imshow("detect image", detect_image)
-    cv2.waitKey(0)
+    # result = detector.image_detect(image)
+    # print(str(result))
+
+    # cv2.imshow("detect image", result.show_image)
+    # cv2.waitKey(0)
+    detector.video_detect()

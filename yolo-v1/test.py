@@ -22,7 +22,9 @@ def image_detection(img_path='test-images/1.jpg'):
 	cv2.waitKey(0)
 
 def video_detection():
-	pass
+	yolo = YOLO_V1_Net()
+	yolo.init_detector('weights/YOLO_small.ckpt')
+	yolo.video_detector()
 
 if __name__ == '__main__':
 	image_detection()

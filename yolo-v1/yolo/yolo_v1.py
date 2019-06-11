@@ -511,7 +511,7 @@ class YOLO_V1_Net(object):
             while ret:
                 image = self.image_detect(frame, False)
                 cv2.imshow('image windows', image)
-                if 27 == cv2.waitKey(10):
+                if 27 == cv2.waitKey(1):
                     break
                 ret, frame = cap.read()
             cv2.destroyAllWindows()
@@ -527,7 +527,7 @@ class YOLO_V1_Net(object):
             while ret:
                 image = self.image_detect(frame, False)
                 cv2.imshow('image windows', image)
-                if 27 == cv2.waitKey(10):
+                if 27 == cv2.waitKey(1):
                     break
                 ret, frame = cap.read()
             cv2.destroyAllWindows()

@@ -44,3 +44,13 @@ ANCHOR_RATIOS = [[2, .5],
 # step 表示的是各特征图与原图之间的比例关系
 ANCHOR_STEPS = [8, 16, 32, 64, 100, 300]
 PRIOR_SCALING = [0.1, 0.1, 0.2, 0.2]        # 先验框缩放比例
+
+
+"""
+path and dataset parameters
+"""
+DATA_PATH = '../../../datasets/'
+PASCAL_PATH = os.path.join(DATA_PATH, 'VOCtrainval_06-Nov-2007')
+CACHE_PATH = os.path.join(PASCAL_PATH, 'cache')
+WEIGHTS_DIR = '../weight/'
+WEIGHTS_FILE = os.path.join(WEIGHTS_DIR, 'ssd_vgg_300_weights.ckpt')
