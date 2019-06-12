@@ -588,7 +588,7 @@ class SSD_DETECTOR(SSD):
 
 class SSD_SOLVER(SSD):
 
-    def __init__(self, weight_file=None, append_name=None):
+    def __init__(self, batch_size, epoches, weight_file=None, append_name=None):
         """
         initialize the Solver of SSD network
         Args:
@@ -596,10 +596,38 @@ class SSD_SOLVER(SSD):
             append_name: 用于保存训练得到的权重文件的文件夹的附加信息
         """
 
+        print("Initialize parameters...")
+        begin = time.time()
         SSD.__init__(self)
         if not weight_file:
             weight_file = '../weight/ssd_vgg_300_weights.ckpt'
-        self.inputX, self.locations, self.predictions, self.logits = SSD.build_net()
+        self.batch_size = batch_size
+        self.epoches = epoches
+        self.inputX, self.locations, self.predictions, self.logits = SSD.build_net(self)
+        self.bboxes = tf.placeholder(tf.float32, shape=[None, 4])   # 真实的目标框
+        self.labels = tf.placeholder(tf.int64, shape=[None])        # 真实目标的类别
+        self._prepare()
+        self.ssd_loss = tf.losses.get_total_loss()
+        print("Finish initializing parameters. Time used: %.3f s"%time.time() - begin)
+
+
+    def _prepare(self):
+        self.anchors = []
+        for index, size in enumerate(self.feature_map_size):
+            anchors_layer = self.ssd_anchor_layer(self.img_size, size, 
+                                                  self.anchor_sizes[index], 
+                                                  self.anchor_ratios[index], 
+                                                  self.anchor_steps[index], 
+                                                  self.boxes_num[index],
+                                                  offset=0.5)
+            self.anchors.append(anchors_layer)
+        self.gclasses, self.gscores, self.glocations = self.ssd_bboxes_encode(self.labels,\
+                                                                              self.bboxes, 
+                                                                              self.anchors, 
+                                                                              self.num_classes,
+                                                                              self.prior_scaling)
+        self.ssd_losses(self.batch_size, self.logits, self.locations, self.gclasses, 
+            self.glocations, self.gscores)
 
 
     @staticmethod
@@ -607,8 +635,6 @@ class SSD_SOLVER(SSD):
                                 bboxes, 
                                 anchors_layer,
                                 num_classes,
-                                no_annotation_label,
-                                match_threshold=0.5, 
                                 prior_scaling=[0.1, 0.1, 0.2, 0.2],
                                 dtype=tf.float32):
         """
@@ -745,8 +771,6 @@ class SSD_SOLVER(SSD):
                           bboxes, 
                           anchors,
                           num_classes,
-                          no_annotation_label,
-                          match_threshold=0.5,
                           prior_scaling=[0.1, 0.1, 0.2, 0.2],
                           dtype=tf.float32, 
                           scope='ssd_bboxes_encode'):
@@ -773,14 +797,12 @@ class SSD_SOLVER(SSD):
             for i, anchors_layer in enumerate(anchors):      # 分别对每一层特征图进行计算
                 with tf.name_scope('bboxes_encode_block_%i'%i):
                     feat_labels, feat_scores, feat_locations = \
-                        SSD_DETECTOR.ssd_bboxes_encode_layer(labesl, 
-                                                             bboxes, 
-                                                             anchors_layer,
-                                                             num_classes,
-                                                             no_annotation_label, 
-                                                             match_threshold, 
-                                                             prior_scaling, 
-                                                             dtype)
+                        SSD_SOLVER.ssd_bboxes_encode_layer(labels, 
+                                                           bboxes, 
+                                                           anchors_layer,
+                                                           num_classes,
+                                                           prior_scaling, 
+                                                           dtype)
                     target_labels.append(feat_labels)
                     target_scores.append(feat_scores)
                     target_locations.append(feat_locations)
@@ -811,7 +833,7 @@ class SSD_SOLVER(SSD):
         """
 
         with tf.name_scope(scope, 'ssd_losses'):
-            shape = logits.get_shape().as_list()
+            shape = logits[0].get_shape().as_list()
             num_classes = shape[-1]
 
             # flatten out all tensors
@@ -843,7 +865,7 @@ class SSD_SOLVER(SSD):
             # hard negative mining
             # 为了保证正负样本尽量平衡，SSD采用了hard negative mining，就是对负样本进行抽样，
             # 抽样时按照置信度误差（预测背景的置信度越小，误差越大）进行降序排序，选取误差较大
-            # 的top-K作为训练的负样本，以保证正负样本比例接近1：3
+            # （即置信度较小）的top-K（即置信度较小）作为训练的负样本，以保证正负样本比例接近1：3
             no_classes = tf.cast(pmask, tf.int32)
             predictions = tf.nn.softmax(logits)
             nmask = tf.logical_and(tf.logical_not(pmask),
@@ -860,15 +882,41 @@ class SSD_SOLVER(SSD):
             n_neg = tf.minimum(n_neg, max_neg_entries)   # 需要通过抽样得到的负例数目
 
             # 抽样得到前 n_neg 个负例
-            val, idxes = tf.nn.top_k(nvalues_flat, k=n_neg)
-            min_hard_pred = val[-1]
+            val, idxes = tf.nn.top_k(-nvalues_flat, k=n_neg)
+            max_hard_pred = -val[-1]
             # final negtive mask
-            nmask = tf.logical_and(nmask, nvalues >= min_hard_pred)
+            nmask = tf.logical_and(nmask, nvalues < max_hard_pred)  # 选取置信度较小的top-k
             fnmask = tf.cast(nmask, dtype)
 
             # calculate cross_entropy loss
             with tf.name_scope('cross_entropy_positive'):
-                loss = tf.nn.
+                loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=gclasses)
+                loss = tf.div(tf.reduce_sum(loss * fpmask), batch_size, name='value')  # 提取正例计算交叉熵
+                tf.losses.add_loss(loss)
+
+            with tf.name_scope('cross_entropy_negative'):
+                loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=no_classes)
+                loss = tf.div(tf.reduce_sum(loss * fnmask), batch_size, name='value')  # 提取负例计算交叉熵
+                tf.losses.add_loss(loss)
+
+            # calculate location loss: smooth_l1
+            def smooth_L1_loss(glocations, pred_locations):
+                """
+                通过smooth_L1_loss计算坐标偏差的损失函数
+                Args:
+                    glocations: 2-D tensor, 真实的目标框坐标
+                    pred_locations: 2-D tensor, 预测得到的目标框坐标
+                """
+                absolute_loss = tf.abs(glocations - pred_locations)
+                square_loss = 0.5 * tf.square(absolute_loss)
+                l1_loss = tf.where(absolute_loss < 1, square_loss, absolute_loss - 0.5)
+                return tf.reduce_sum(l1_loss, axis=-1)
+
+            with tf.name_scope('localization'):
+                weight = tf.expand_dims(alpha * fpmask, axis=-1)  # 进行维度扩展，为了后续矩阵相乘时可以广播
+                loss = smooth_L1_loss(glocations, locations)
+                loss = tf.div(tf.reduce_sum(loss * weight), batch_size, name='value')
+                tf.losses.add_loss(loss)
 
 
 if __name__ == '__main__':
@@ -880,12 +928,13 @@ if __name__ == '__main__':
     # # ssd.nms(max_classes, scores, bboxes)
     # print(boxes)
 
-    detector = SSD_DETECTOR('../weight/ssd_vgg_300_weights.ckpt')
-    image = cv2.imread("../../yolo-v1/test-images/1.jpg")
+    # detector = SSD_DETECTOR('../weight/ssd_vgg_300_weights.ckpt')
+    # image = cv2.imread("../../yolo-v1/test-images/1.jpg")
     # cv2.imshow("image", image)
     # result = detector.image_detect(image)
     # print(str(result))
 
     # cv2.imshow("detect image", result.show_image)
     # cv2.waitKey(0)
-    detector.video_detect()
+    # detector.video_detect()
+    solver = SSD_SOLVER(10, 15)
