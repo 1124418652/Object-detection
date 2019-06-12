@@ -588,22 +588,21 @@ class SSD_DETECTOR(SSD):
 
 class SSD_SOLVER(SSD):
 
-    def __init__(self, train_dataset, weight_file=None, append_name=None):
+    def __init__(self, weight_file=None, append_name=None):
         """
         initialize the Solver of SSD network
         Args:
-            train_dataset: 用于制作训练数据集的对象
             weight_file: 用于初始化的权重文件路径
             append_name: 用于保存训练得到的权重文件的文件夹的附加信息
         """
 
         SSD.__init__(self)
-        self.data = train_dataset
         if not weight_file:
             weight_file = '../weight/ssd_vgg_300_weights.ckpt'
         self.inputX, self.locations, self.predictions, self.logits = SSD.build_net()
 
 
+    @staticmethod
     def ssd_bboxes_encode_layer(labels,
                                 bboxes, 
                                 anchors_layer,
@@ -647,7 +646,7 @@ class SSD_SOLVER(SSD):
 
         def jaccard_with_anchors(bbox):
             """
-            compute jaccard score between a box and the anchors
+            compute jaccard score between a box and all anchors of this layer
             """
             xmin = tf.maximum(anchor_xmin, bbox[0])
             ymin = tf.maximum(anchor_ymin, bbox[1])
@@ -693,22 +692,183 @@ class SSD_SOLVER(SSD):
                 - jaccard > 0.5
                 - 一个锚框只与一个iou最大的目标框进行匹配
             """
-            label = labels[i]
+            label = labels[i]       # 提取第i个实际框的信息，取值范围为1~20
             bbox = bboxes[i]
+            jaccard = jaccard_with_anchors(bbox)
+
+            # Mask: check threshold + scores + no annotations + num_classes.
+            mask = tf.greater(jaccard, feat_scores)     # 与当前anchor的iou最大的bbox
+            # mask = tf.logical_and(mask, tf.greater(jaccard, match_threshold))      # iou大于阈值，这一步在loss中计算，用于统计正例的数目
+            mask = tf.logical_and(mask, feat_scores > -0.5)
+            mask = tf.logical_and(mask, label < num_classes)       
+            imask = tf.cast(mask, tf.int64)
+            fmask = tf.cast(mask, dtype)
+
+            # update values of parameters using mask
+            feat_labels = imask * label + (1 - imask) * feat_labels
+            feat_scores = tf.where(mask, jaccard, feat_scores)        # scores 即 iou
+            feat_xmin = fmask * bbox[0] + (1 - fmask) * feat_xmin
+            feat_ymin = fmask * bbox[1] + (1 - fmask) * feat_ymin
+            feat_xmax = fmask * bbox[2] + (1 - fmask) * feat_xmax
+            feat_ymax = fmask * bbox[3] + (1 - fmask) * feat_ymax
+
+            return [i+1, feat_labels, feat_scores, feat_xmin,\
+                    feat_ymin, feat_xmax, feat_ymax]
+
+        # Main loop definition
+        i = 0
+        [i, feat_labels, feat_scores,
+         feat_xmin, feat_ymin, 
+         feat_xmax, feat_ymax] = tf.while_loop(condition, body, 
+                                               [i, feat_labels, feat_scores,
+                                                feat_xmin, feat_ymin,
+                                                feat_xmax, feat_ymax])
+        
+        # transform from [xmin, ymin, xmax, ymax] to [cx, cy, w, h]
+        feat_cx = (feat_xmin + feat_xmax) / 2
+        feat_cy = (feat_ymin + feat_ymax) / 2 
+        feat_w = feat_xmax - feat_xmin
+        feat_h = feat_ymax - feat_ymin
+        
+        # encode the coordinations
+        feat_cx = (feat_cx - anchor_x) / anchor_w / prior_scaling[0]
+        feat_cy = (feat_cy - anchor_y) / anchor_h / prior_scaling[1]
+        feat_w = tf.log(feat_w / anchor_w) / prior_scaling[2]
+        feat_h = tf.log(feat_h / anchor_h) / prior_scaling[3]
+        feat_locations = tf.stack([feat_cx, feat_cy, feat_w, feat_h], axis=-1)
+
+        return feat_labels, feat_scores, feat_locations
 
 
-    def ssd_losses(self, logits, locations, gclasses, glocations,
-        gscores, match_threshold=0.5, negative_ratio=3.,
-        alpha=1., label_smoothing=0., device='/gpu:0',
-        scope=None):
+    @staticmethod
+    def ssd_bboxes_encode(labels, 
+                          bboxes, 
+                          anchors,
+                          num_classes,
+                          no_annotation_label,
+                          match_threshold=0.5,
+                          prior_scaling=[0.1, 0.1, 0.2, 0.2],
+                          dtype=tf.float32, 
+                          scope='ssd_bboxes_encode'):
+        """
+        对输入的实际标签以及实际目标框进行编码，通过ssd_bboxes_encode_layer()函数将
+        实际目标框分别与每一层中的anchors进行匹配。该函数是只针对一张图片进行编码的，而
+        不是一个batch
+        Args:
+            labels: 1-D tensor(tf.int64), 图片中每一个目标框所对应的类别
+            bboxes: Nx4 tensor(float), 实际目标框的相对坐标
+            anchors: 所有 feat_map 所对应的锚框列表，列表中的每一个元素都是 3-D tensor
+            num_classes: int type, 类别数
+            no_annotation_label:
+            match_threshold: 锚框与目标框匹配的阈值
+            prior_scaling: 对目标框坐标进行编码时 x, y, w, h 分别缩放的尺度
+        Returns:
+            (target_labels, target_scores, target_locations):
+                实际的目标框分别与每一个特征图中锚框进行匹配的结果
+        """
+        with tf.name_scope(scope):
+            target_labels = []
+            target_scores = []
+            target_locations = []
+            for i, anchors_layer in enumerate(anchors):      # 分别对每一层特征图进行计算
+                with tf.name_scope('bboxes_encode_block_%i'%i):
+                    feat_labels, feat_scores, feat_locations = \
+                        SSD_DETECTOR.ssd_bboxes_encode_layer(labesl, 
+                                                             bboxes, 
+                                                             anchors_layer,
+                                                             num_classes,
+                                                             no_annotation_label, 
+                                                             match_threshold, 
+                                                             prior_scaling, 
+                                                             dtype)
+                    target_labels.append(feat_labels)
+                    target_scores.append(feat_scores)
+                    target_locations.append(feat_locations)
+            return target_labels, target_scores, target_locations
+
+
+    def ssd_losses(self, batch_size, logits, locations, gclasses, 
+        glocations, gscores, match_threshold=0.5, negative_ratio=3.,
+        alpha=1., label_smoothing=0., device='/gpu:0', scope=None):
         """
         计算SSD网络的损失函数，包含位置误差及类别误差的加权和
         Args:
-            logits: list type, 6 层特征图中每一层的预测类别输出
-            locations: list type, 6 层特征图中每一层的预测位置输出
-            gclasses: 
+            batch_size: int type
+            logits: list type, 6 层特征图中每一层的预测类别输出，列表中每一元素的shape为：
+                    [batch_size, map_size, map_size, num_boxes, num_classes]，不同的层只
+                    有中间的三个维度有差别
+            locations: list type, 6 层特征图中每一层的预测位置输出，列表中每一元素的shape为：
+                       [batch_size, map_size, map_size, num_boxes, 4]，不同的层
+                       只有中间的三个维度有差别
+            gclasses: list type, 6 层特征图中每一层的实际类别，列表中每一元素的shape为：
+                      [batch_size, map_size, map_size, num_boxes]
+            glocations: list type, 6 层特征图中每一层的anchor对应的实际目标框坐标，列表中每一
+                        元素的shape为：[batch_size, map_size, map_size, num_boxes, 4]
+            gscores: list type, 6 层特征图中每一层的anchor对应的得分(iou)，列表中每一元素的
+                     shape 为：[batch_size, map_size, map_size, num_boxes]
+            match_threshold: 锚框与目标框匹配的阈值
+            negative_ratio: 负例数目与正例数目的比例
         """
-        
+
+        with tf.name_scope(scope, 'ssd_losses'):
+            shape = logits.get_shape().as_list()
+            num_classes = shape[-1]
+
+            # flatten out all tensors
+            flogits = []
+            flocations = []
+            fgclasses = []
+            fglocations = []
+            fgscores = []
+            for i in range(len(logits)):
+                flogits.append(tf.reshape(logits[i], [-1, num_classes]))
+                flocations.append(tf.reshape(locations[i], [-1, 4]))
+                fgclasses.append(tf.reshape(gclasses[i], [-1]))
+                fglocations.append(tf.reshape(glocations[i], [-1, 4]))
+                fgscores.append(tf.reshape(gscores[i], [-1]))
+
+            # concatenate the list
+            logits = tf.concat(flogits, axis=0)
+            locations = tf.concat(flocations, axis=0)
+            gclasses = tf.concat(fgclasses, axis=0)
+            glocations = tf.concat(fglocations, axis=0)
+            gscores = tf.concat(fgscores, axis=0)
+            dtype = logits.dtype
+
+            # compute positive matching mask
+            pmask = gscores > match_threshold
+            fpmask = tf.cast(pmask, dtype)
+            n_positive = tf.reduce_sum(fpmask)    # 统计正例的数目
+
+            # hard negative mining
+            # 为了保证正负样本尽量平衡，SSD采用了hard negative mining，就是对负样本进行抽样，
+            # 抽样时按照置信度误差（预测背景的置信度越小，误差越大）进行降序排序，选取误差较大
+            # 的top-K作为训练的负样本，以保证正负样本比例接近1：3
+            no_classes = tf.cast(pmask, tf.int32)
+            predictions = tf.nn.softmax(logits)
+            nmask = tf.logical_and(tf.logical_not(pmask),
+                                   gscores > -0.5)
+            fnmask = tf.cast(nmask, dtype)
+            nvalues = tf.where(nmask, 
+                               predictions[:, 0],     # 预测的第一项为背景的概率，之后为实际物体的概率
+                               1. - fnmask)
+            nvalues_flat = tf.reshape(nvalues, [-1])
+
+            # number of negative entries to select
+            max_neg_entries = tf.cast(tf.reduce_sum(fnmask), tf.int32)     # 计算得到负例的总数
+            n_neg = tf.cast(negative_ratio * n_positive, tf.int32) + batch_size
+            n_neg = tf.minimum(n_neg, max_neg_entries)   # 需要通过抽样得到的负例数目
+
+            # 抽样得到前 n_neg 个负例
+            val, idxes = tf.nn.top_k(nvalues_flat, k=n_neg)
+            min_hard_pred = val[-1]
+            # final negtive mask
+            nmask = tf.logical_and(nmask, nvalues >= min_hard_pred)
+            fnmask = tf.cast(nmask, dtype)
+
+            # calculate cross_entropy loss
+            with tf.name_scope('cross_entropy_positive'):
+                loss = tf.nn.
 
 
 if __name__ == '__main__':
