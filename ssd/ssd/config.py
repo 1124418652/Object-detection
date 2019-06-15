@@ -51,6 +51,12 @@ path and dataset parameters
 """
 DATA_PATH = '../../../datasets/'
 PASCAL_PATH = os.path.join(DATA_PATH, 'VOCtrainval_06-Nov-2007')
-CACHE_PATH = os.path.join(PASCAL_PATH, 'cache')
+CACHE_PATH = os.path.join('..', 'cache')
 WEIGHTS_DIR = '../weight/'
 WEIGHTS_FILE = os.path.join(WEIGHTS_DIR, 'ssd_vgg_300_weights.ckpt')
+
+
+"""
+data prepare parameters
+"""
+FLIPPED = True

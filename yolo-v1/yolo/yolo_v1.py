@@ -12,9 +12,10 @@ import time
 import datetime
 import numpy as np 
 import tensorflow as tf 
-import yolo.config as cfg
-sys.path.append('../utils')
-from utils.pascal_voc import Pascal_voc
+sys.path.append('../yolo/')
+import config as cfg
+sys.path.append('../utils/')
+from pascal_voc import Pascal_voc
 import timer
 slim = tf.contrib.slim
 
@@ -677,10 +678,10 @@ if __name__ == '__main__':
     # image = ((image[0] + 1) * 255/2).astype(np.uint8)
     # print(image)
     # cv2.imshow("image", image)
-    # image = yolo.image_detect(image)
-    # cv2.imshow("si", image)
-    # cv2.waitKey(0)
-    yolo.video_detector(True, '../test-images/轨道有异物2.mp4')
+    image = yolo.image_detect(image)
+    cv2.imshow("si", image)
+    cv2.waitKey(0)
+    # yolo.video_detector(True, '../test-images/轨道有异物2.mp4')
     # dataset = Pascal_voc('train')
     # yolo.init_solver(dataset, append_name='pascal_voc_trained_weight')
     # yolo.train()

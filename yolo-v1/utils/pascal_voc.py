@@ -13,8 +13,8 @@ import pickle
 import numpy as np 
 import xml.etree.ElementTree as ET
 
-sys.path.append('../yolo/')
-import yolo.config as cfg
+sys.path.append('../yolo')
+import config as cfg
 
 
 class Pascal_voc(object):
@@ -23,7 +23,7 @@ class Pascal_voc(object):
 		"""
 		initialize the object
 		Args:
-			phase: str type, indicates the phase that dataset was used,
+   			phase: str type, indicates the phase that dataset was used,
 				   {'trian', 'validation'}
 			rebuild: boolean type, if True, the cache file of labels will be rewrite
 		"""

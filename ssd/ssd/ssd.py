@@ -604,11 +604,15 @@ class SSD_SOLVER(SSD):
         self.batch_size = batch_size
         self.epoches = epoches
         self.inputX, self.locations, self.predictions, self.logits = SSD.build_net(self)
-        self.bboxes = tf.placeholder(tf.float32, shape=[None, 4])   # 真实的目标框
-        self.labels = tf.placeholder(tf.int64, shape=[None])        # 真实目标的类别
-        self._prepare()
+        self.batch_classes = tf.placeholder(tf.int32, shape=[None, None])
+        self.batch_boxes = tf.placeholder(tf.float32, shape=[None, None, 4])
+        self._prepare()      # 计算loss
         self.ssd_loss = tf.losses.get_total_loss()
-        print("Finish initializing parameters. Time used: %.3f s"%time.time() - begin)
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = True
+        self.sess = tf.Session(config=config)      # 创建会话
+        self.sess.run(tf.global_variables_initializer())
+        print("Finish initializing parameters. Time used: %.3f s"%(time.time() - begin))
 
 
     def _prepare(self):
@@ -621,13 +625,26 @@ class SSD_SOLVER(SSD):
                                                   self.boxes_num[index],
                                                   offset=0.5)
             self.anchors.append(anchors_layer)
-        self.gclasses, self.gscores, self.glocations = self.ssd_bboxes_encode(self.labels,\
-                                                                              self.bboxes, 
-                                                                              self.anchors, 
-                                                                              self.num_classes,
-                                                                              self.prior_scaling)
+
+        self.gclasses = []
+        self.glocations = []
+        self.gscores = []
+        for index in range(self.batch_size):
+            # 在该循环中对batch中单张图片的信息进行编码
+            labels = self.batch_classes[index]
+            bboxes = self.batch_boxes[index]
+            gclasses_img, gscores_img, glocations_img = self.ssd_bboxes_encode(labels,\
+                                                                               bboxes, 
+                                                                               self.anchors, 
+                                                                               self.num_classes,
+                                                                               self.prior_scaling)
+            # 
+
         self.ssd_losses(self.batch_size, self.logits, self.locations, self.gclasses, 
             self.glocations, self.gscores)
+
+
+
 
 
     @staticmethod
@@ -822,11 +839,11 @@ class SSD_SOLVER(SSD):
             locations: list type, 6 层特征图中每一层的预测位置输出，列表中每一元素的shape为：
                        [batch_size, map_size, map_size, num_boxes, 4]，不同的层
                        只有中间的三个维度有差别
-            gclasses: list type, 6 层特征图中每一层的实际类别，列表中每一元素的shape为：
+            gclasses: list type, 一个batch中 6 层特征图中每一层的实际类别，列表中每一元素的shape为：
                       [batch_size, map_size, map_size, num_boxes]
-            glocations: list type, 6 层特征图中每一层的anchor对应的实际目标框坐标，列表中每一
+            glocations: list type, 一个batch中 6 层特征图中每一层的anchor对应的实际目标框坐标，列表中每一
                         元素的shape为：[batch_size, map_size, map_size, num_boxes, 4]
-            gscores: list type, 6 层特征图中每一层的anchor对应的得分(iou)，列表中每一元素的
+            gscores: list type, 一个batch中 6 层特征图中每一层的anchor对应的得分(iou)，列表中每一元素的
                      shape 为：[batch_size, map_size, map_size, num_boxes]
             match_threshold: 锚框与目标框匹配的阈值
             negative_ratio: 负例数目与正例数目的比例
@@ -842,7 +859,7 @@ class SSD_SOLVER(SSD):
             fgclasses = []
             fglocations = []
             fgscores = []
-            for i in range(len(logits)):
+            for i in range(len(logits)):     # 按特征图的层数进行遍历
                 flogits.append(tf.reshape(logits[i], [-1, num_classes]))
                 flocations.append(tf.reshape(locations[i], [-1, 4]))
                 fgclasses.append(tf.reshape(gclasses[i], [-1]))
@@ -921,20 +938,14 @@ class SSD_SOLVER(SSD):
 
 if __name__ == '__main__':
     ssd = SSD()
-    # X, locations, predictions = ssd.build_net()
-    # box = SSD.ssd_anchor_layer(ssd.img_size, (38, 38), (21, 45), [2, 0.5], 8, 4)
-    # boxes = ssd.ssd_decode(locations[0], box, ssd.prior_scaling)
-    # max_classes, scores, bboxes = ssd.choose_anchor_boxes(predictions[0], boxes)
-    # # ssd.nms(max_classes, scores, bboxes)
-    # print(boxes)
 
-    # detector = SSD_DETECTOR('../weight/ssd_vgg_300_weights.ckpt')
-    # image = cv2.imread("../../yolo-v1/test-images/1.jpg")
+    detector = SSD_DETECTOR('../weight/ssd_vgg_300_weights.ckpt')
+    image = cv2.imread("../../yolo-v1/test-images/1.jpg")
     # cv2.imshow("image", image)
     # result = detector.image_detect(image)
     # print(str(result))
-
+    # cv2.namedWindow("detect image", 2)
     # cv2.imshow("detect image", result.show_image)
     # cv2.waitKey(0)
-    # detector.video_detect()
-    solver = SSD_SOLVER(10, 15)
+    detector.video_detect()
+    # solver = SSD_SOLVER(10, 15)
