@@ -604,7 +604,7 @@ class SSD_SOLVER(SSD):
         self.batch_size = batch_size
         self.epoches = epoches
         self.inputX, self.locations, self.predictions, self.logits = SSD.build_net(self)
-        self.batch_classes = tf.placeholder(tf.int32, shape=[None, None])
+        self.batch_classes = tf.placeholder(tf.int64, shape=[None, None])
         self.batch_boxes = tf.placeholder(tf.float32, shape=[None, None, 4])
         self._prepare()      # 计算loss
         self.ssd_loss = tf.losses.get_total_loss()
@@ -638,7 +638,13 @@ class SSD_SOLVER(SSD):
                                                                                self.anchors, 
                                                                                self.num_classes,
                                                                                self.prior_scaling)
-            # 
+            # 对单张图片的编码后信息进行组合
+            self.gclasses.append(gclasses_img)
+            self.glocations.append(glocations_img)
+            self.gscores.append(gscores_img)
+
+        self.gclasses = tf.transpose(self.gclasses, perm=[1, 0, 2, 3, 4])
+        print(self.gclasses.get_shape().as_list())
 
         self.ssd_losses(self.batch_size, self.logits, self.locations, self.gclasses, 
             self.glocations, self.gscores)
@@ -937,9 +943,9 @@ class SSD_SOLVER(SSD):
 
 
 if __name__ == '__main__':
-    ssd = SSD()
+    # ssd = SSD()
 
-    detector = SSD_DETECTOR('../weight/ssd_vgg_300_weights.ckpt')
+    # detector = SSD_DETECTOR('../weight/ssd_vgg_300_weights.ckpt')
     image = cv2.imread("../../yolo-v1/test-images/1.jpg")
     # cv2.imshow("image", image)
     # result = detector.image_detect(image)
@@ -947,5 +953,5 @@ if __name__ == '__main__':
     # cv2.namedWindow("detect image", 2)
     # cv2.imshow("detect image", result.show_image)
     # cv2.waitKey(0)
-    detector.video_detect()
-    # solver = SSD_SOLVER(10, 15)
+    # detector.video_detect()
+    solver = SSD_SOLVER(10, 15)
