@@ -604,10 +604,10 @@ class SSD_SOLVER(SSD):
         self.batch_size = batch_size
         self.epoches = epoches
         self.inputX, self.locations, self.predictions, self.logits = SSD.build_net(self)
-        self.batch_classes = tf.placeholder(tf.int32, shape=[None, None])
+        self.batch_classes = tf.placeholder(tf.int64, shape=[None, None])
         self.batch_boxes = tf.placeholder(tf.float32, shape=[None, None, 4])
         self._prepare()      # 计算loss
-        self.ssd_loss = tf.losses.get_total_loss()
+        # self.ssd_loss = tf.losses.get_total_loss()   #############################
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
         self.sess = tf.Session(config=config)      # 创建会话
@@ -617,6 +617,9 @@ class SSD_SOLVER(SSD):
 
     def _prepare(self):
         self.anchors = []
+        self.gclasses = []
+        self.glocations = []
+        self.gscores = []
         for index, size in enumerate(self.feature_map_size):
             anchors_layer = self.ssd_anchor_layer(self.img_size, size, 
                                                   self.anchor_sizes[index], 
@@ -626,9 +629,6 @@ class SSD_SOLVER(SSD):
                                                   offset=0.5)
             self.anchors.append(anchors_layer)
 
-        self.gclasses = []
-        self.glocations = []
-        self.gscores = []
         for index in range(self.batch_size):
             # 在该循环中对batch中单张图片的信息进行编码
             labels = self.batch_classes[index]
@@ -638,7 +638,23 @@ class SSD_SOLVER(SSD):
                                                                                self.anchors, 
                                                                                self.num_classes,
                                                                                self.prior_scaling)
-            # 
+            self.gclasses.append(gclasses_img)
+            self.glocations.append(glocations_img)
+            self.gscores.append(gscores_img)
+
+        # 将 batch_size 的维度和 feat_layer 的维度进行互换
+        self.gclasses = np.array(self.gclasses)
+        self.glocations = np.array(self.glocations)
+        self.gscores = np.array(self.gscores)
+        self.gclasses = np.transpose(self.gclasses, axes=[1, 0]).tolist()
+        self.glocations = np.transpose(self.glocations, axes=[1, 0]).tolist()
+        self.gscores = np.transpose(self.gscores, axes=[1, 0]).tolist()
+
+        # 将 batch_size 维进行拼接
+        for i in range(len(self.feature_map_size)):
+            self.gclasses[i] = tf.stack(self.gclasses[i], axis=0)
+            self.glocations[i] = tf.stack(self.glocations[i], axis=0)
+            self.gscores[i] = tf.stack(self.gscores[i], axis=0)
 
         self.ssd_losses(self.batch_size, self.logits, self.locations, self.gclasses, 
             self.glocations, self.gscores)
@@ -939,7 +955,7 @@ class SSD_SOLVER(SSD):
 if __name__ == '__main__':
     ssd = SSD()
 
-    detector = SSD_DETECTOR('../weight/ssd_vgg_300_weights.ckpt')
+    # detector = SSD_DETECTOR('../weight/ssd_vgg_300_weights.ckpt')
     image = cv2.imread("../../yolo-v1/test-images/1.jpg")
     # cv2.imshow("image", image)
     # result = detector.image_detect(image)
@@ -947,5 +963,5 @@ if __name__ == '__main__':
     # cv2.namedWindow("detect image", 2)
     # cv2.imshow("detect image", result.show_image)
     # cv2.waitKey(0)
-    detector.video_detect()
-    # solver = SSD_SOLVER(10, 15)
+    # detector.video_detect()
+    solver = SSD_SOLVER(10, 15)
