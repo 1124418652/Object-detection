@@ -638,6 +638,7 @@ class SSD_SOLVER(SSD):
                                                                                self.anchors, 
                                                                                self.num_classes,
                                                                                self.prior_scaling)
+            # 对单张图片的编码后信息进行组合
             self.gclasses.append(gclasses_img)
             self.glocations.append(glocations_img)
             self.gscores.append(gscores_img)
@@ -953,7 +954,7 @@ class SSD_SOLVER(SSD):
 
 
 if __name__ == '__main__':
-    ssd = SSD()
+    # ssd = SSD()
 
     # detector = SSD_DETECTOR('../weight/ssd_vgg_300_weights.ckpt')
     image = cv2.imread("../../yolo-v1/test-images/1.jpg")
