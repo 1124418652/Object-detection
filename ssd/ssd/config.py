@@ -60,3 +60,16 @@ WEIGHTS_FILE = os.path.join(WEIGHTS_DIR, 'ssd_vgg_300_weights.ckpt')
 data prepare parameters
 """
 FLIPPED = True
+
+
+"""
+学习率参数
+"""
+LEARNING_RATE = 1e-4
+DECAY_STEP = 30000
+DECAY_RATE = 0.1
+STAIRCASE = True          # if False: global//decay_step
+BATCH_SIZE = 10
+MAX_ITER = 15000
+SUMMARY_ITER = 10         # update the summary file after SUMMARY_ITER's iterations
+SAVE_ITER = 1000          # save the weights parameters after SAVE_ITER's iterations

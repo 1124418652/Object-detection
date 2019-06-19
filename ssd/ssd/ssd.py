@@ -7,10 +7,15 @@ Created on 2019/6/10
 
 import os
 import cv2
+import sys
 import time
+import datetime
 import config as cfg
 import numpy as np 
 import tensorflow as tf
+
+sys.path.append('../utils/')
+from pascal_voc import Pascal_voc
 
 
 class SSD(object):
@@ -588,10 +593,13 @@ class SSD_DETECTOR(SSD):
 
 class SSD_SOLVER(SSD):
 
-    def __init__(self, batch_size, epoches, weight_file=None, append_name=None):
+    def __init__(self, batch_size, epoches, train_dataset, 
+        valid_dataset, weight_file=None, append_name=None):
         """
         initialize the Solver of SSD network
         Args:
+            train_dataset: 用于训练的数据集提取对象
+            valid_dataset: 用于验证模型准确率的验证集对象
             weight_file: 用于初始化的权重文件路径
             append_name: 用于保存训练得到的权重文件的文件夹的附加信息
         """
@@ -603,16 +611,55 @@ class SSD_SOLVER(SSD):
             weight_file = '../weight/ssd_vgg_300_weights.ckpt'
         self.batch_size = batch_size
         self.epoches = epoches
+        self.train_dataset = train_dataset
+        self.valid_dataset = valid_dataset
+
+        # 网络信息提取
         self.inputX, self.locations, self.predictions, self.logits = SSD.build_net(self)
         self.batch_classes = tf.placeholder(tf.int64, shape=[None, None])
         self.batch_boxes = tf.placeholder(tf.float32, shape=[None, None, 4])
         self._prepare()      # 计算loss
-        # self.ssd_loss = tf.losses.get_total_loss()   #############################
+        self.ssd_loss = tf.losses.get_total_loss()   #############################
+
+        # 文件处理
+        self.saver = tf.train.Saver(max_to_keep=5)
+        self.variable_to_restore = tf.global_variables()
+        weight_dir = os.path.join('../weight', append_name,
+            datetime.datetime.now().strftime('%Y_%m_%d_%H_%M')) 
+        self.ckpt_dir = os.path.join(weight_dir, 'ckpt')
+        if not os.path.exists(self.ckpt_dir):
+            os.mkdir(self.ckpt_dir)
+        self.summary_dir = os.path.join(weight_dir, 'summary')
+        if not os.path.exists(self.summary_dir):
+            os.mkdir(self.summary_dir)
+
+        # 模型参数保存
+        self.summary_op = tf.summary.merge_all()
+        self.writer = tf.summary.FileWriter(self.summary_dir, flush_secs=60)
+
+        # 学习率衰减
+        self.global_step = tf.Variable(0, trainable=False, name='global_step')
+        self.max_iter = cfg.MAX_ITER
+        self.initial_learning_rate = cfg.LEARNING_RATE
+        self.decay_step = cfg.DECAY_STEP
+        self.decay_rate = cfg.DECAY_RATE
+        self.staircase = cfg.STAIRCASE
+        self.
+
+        
+        # 会话创建
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
         self.sess = tf.Session(config=config)      # 创建会话
         self.sess.run(tf.global_variables_initializer())
         print("Finish initializing parameters. Time used: %.3f s"%(time.time() - begin))
+        print("Restoring weights from: ", weight_file)
+        self.saver.restore(self.sess, weight_file)
+        print("Finish restoring weights.")
+
+
+    def train(self):
+        pass
 
 
     def _prepare(self):
@@ -659,9 +706,6 @@ class SSD_SOLVER(SSD):
 
         self.ssd_losses(self.batch_size, self.logits, self.locations, self.gclasses, 
             self.glocations, self.gscores)
-
-
-
 
 
     @staticmethod
@@ -965,4 +1009,4 @@ if __name__ == '__main__':
     # cv2.imshow("detect image", result.show_image)
     # cv2.waitKey(0)
     # detector.video_detect()
-    solver = SSD_SOLVER(10, 15)
+    solver = SSD_SOLVER(10, 15, None, None)
