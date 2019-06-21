@@ -1049,5 +1049,6 @@ if __name__ == '__main__':
     # detector.video_detect()
     train_dataset = Pascal_voc('train', batch_size=2)
     test_dataset = Pascal_voc('test', batch_size=2)
+    image, * = train_dataset.get_data()
     solver = SSD_SOLVER(2, 15, train_dataset, test_dataset)
     solver.train()
