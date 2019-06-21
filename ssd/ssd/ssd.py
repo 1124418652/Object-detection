@@ -48,6 +48,8 @@ class SSD(object):
         self.threshold = threshold
         self.show_info = []
 
+        self.sess = None
+
 
     def l2norm(self, X, trainable=True, scope='L2Normalization'):
         n_channles = X.get_shape().as_list()[-1]   # 获取特征图的通道数
@@ -594,7 +596,7 @@ class SSD_DETECTOR(SSD):
 class SSD_SOLVER(SSD):
 
     def __init__(self, batch_size, epoches, train_dataset, 
-        valid_dataset, weight_file=None, append_name=None):
+        valid_dataset, weight_file=None, append_name='PCB'):
         """
         initialize the Solver of SSD network
         Args:
@@ -616,16 +618,23 @@ class SSD_SOLVER(SSD):
 
         # 网络信息提取
         self.inputX, self.locations, self.predictions, self.logits = SSD.build_net(self)
-        self.batch_classes = tf.placeholder(tf.int64, shape=[None, None])
-        self.batch_boxes = tf.placeholder(tf.float32, shape=[None, None, 4])
+        # self.batch_classes = tf.placeholder(tf.int64, shape=[None, None])
+        # self.batch_boxes = tf.placeholder(tf.float32, shape=[None, None, 4])
+
+        self.batch_classes = [tf.placeholder(tf.int64, shape=[None], name='classes'+str(i)) 
+            for i in range(batch_size)]
+        self.batch_boxes = [tf.placeholder(tf.float32, shape=[None, 4], name='boxes'+str(i)) 
+            for i in range(batch_size)]
+        print(self.batch_boxes)
         self._prepare()      # 计算loss
-        self.ssd_loss = tf.losses.get_total_loss()   #############################
+        self.ssd_loss = tf.losses.get_total_loss()   # 得到损失函数
 
         # 文件处理
         self.saver = tf.train.Saver(max_to_keep=5)
         self.variable_to_restore = tf.global_variables()
-        weight_dir = os.path.join('../weight', append_name,
-            datetime.datetime.now().strftime('%Y_%m_%d_%H_%M')) 
+        weight_dir = os.path.join('../weight', append_name)
+        if not os.path.exists(weight_dir):
+            os.makedirs(weight_dir) 
         self.ckpt_dir = os.path.join(weight_dir, 'ckpt')
         if not os.path.exists(self.ckpt_dir):
             os.mkdir(self.ckpt_dir)
@@ -644,22 +653,51 @@ class SSD_SOLVER(SSD):
         self.decay_step = cfg.DECAY_STEP
         self.decay_rate = cfg.DECAY_RATE
         self.staircase = cfg.STAIRCASE
-        self.
+        self.learning_rate = tf.train.exponential_decay(
+            self.initial_learning_rate, self.global_step, self.decay_step,
+            self.decay_rate, self.staircase, name='learning_rate')
 
+        # 设置优化器
+        self.optimizer = tf.train.GradientDescentOptimizer(
+            learning_rate=self.learning_rate)
+        self.train_op = self.optimizer.minimize(self.ssd_loss, self.global_step)
         
         # 会话创建
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
+        if self.sess:
+            self.sess.close()
         self.sess = tf.Session(config=config)      # 创建会话
         self.sess.run(tf.global_variables_initializer())
         print("Finish initializing parameters. Time used: %.3f s"%(time.time() - begin))
+
+        # 取出预训练的权重
         print("Restoring weights from: ", weight_file)
         self.saver.restore(self.sess, weight_file)
         print("Finish restoring weights.")
 
+        # tensorboard 文件写入
+        self.writer = tf.summary.FileWriter(self.summary_dir, flush_secs=60)
+        self.writer.add_graph(self.sess.graph)
+
 
     def train(self):
-        pass
+        """
+        执行模型的训练过程
+        """
+        for step in range(1, 100):
+            begin = time.time()
+            batch_images, batch_classes, batch_boxes = self.train_dataset.get_data()
+            val_images, val_classes, val_boxes = self.valid_dataset.get_data()
+            train_feed_dict = {self.inputX: batch_images}
+            train_feed_dict.update(dict(zip(self.batch_classes, batch_classes)))
+            train_feed_dict.update(dict(zip(self.batch_boxes, batch_boxes)))
+
+            loss, _ = self.sess.run([self.ssd_loss, self.train_op], feed_dict=train_feed_dict)
+            locations = self.sess.run(self.locations, feed_dict=train_feed_dict)
+
+            print('loss: ', loss)
+            print(locations)
 
 
     def _prepare(self):
@@ -1009,4 +1047,7 @@ if __name__ == '__main__':
     # cv2.imshow("detect image", result.show_image)
     # cv2.waitKey(0)
     # detector.video_detect()
-    solver = SSD_SOLVER(10, 15, None, None)
+    train_dataset = Pascal_voc('train', batch_size=2)
+    test_dataset = Pascal_voc('test', batch_size=2)
+    solver = SSD_SOLVER(2, 15, train_dataset, test_dataset)
+    solver.train()

@@ -128,7 +128,7 @@ class Pascal_voc(object):
 		if 'train' == self.phase:
 			txt_name = os.path.join(self.data_path, 'ImageSets', 'Main', 'trainval.txt')
 		else:
-			txt_name = os.path.join(self.data_path, 'ImageSets', 'Main', 'test.txt')
+			txt_name = os.path.join(self.data_path, 'ImageSets', 'Main', 'val.txt')
 
 		with open(txt_name, 'r') as fr:
 			image_indexes = [x.strip() for x in fr.readlines()]
